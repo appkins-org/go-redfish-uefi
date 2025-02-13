@@ -4,7 +4,7 @@ go 1.23.5
 
 require (
 	github.com/0x5a17ed/uefi v0.7.0
-	github.com/fsnotify/fsnotify v1.7.0
+	github.com/fsnotify/fsnotify v1.8.0
 	github.com/gin-gonic/gin v1.9.1
 	github.com/go-logr/logr v1.4.2
 	github.com/google/go-cmp v0.6.0
