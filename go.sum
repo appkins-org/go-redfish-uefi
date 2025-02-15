@@ -197,6 +197,8 @@ github.com/twitchyliquid64/golang-asm v0.15.1 h1:SU5vSMR7hnwNxj24w34ZyCi/FmDZTkS
 github.com/twitchyliquid64/golang-asm v0.15.1/go.mod h1:a1lVb/DtPvCB8fslRZhAngC2+aY1QWCk3Cedj/Gdt08=
 github.com/ubiquiti-community/go-unifi v1.32.3 h1:X6B/eOvsqDLdsnOYveBxxr0AGjv1U1K0SdS8XpWdEls=
 github.com/ubiquiti-community/go-unifi v1.32.3/go.mod h1:b6sqInBsNP+LgCcrRZeK6/+JPBh4vL1Bi8R06a/VKXs=
+github.com/ubiquiti-community/go-unifi v1.33.4 h1:0vUpXR1GeSybfH12NWzN12+rTciRo/jgX4EY9aIOPZE=
+github.com/ubiquiti-community/go-unifi v1.33.4/go.mod h1:b6sqInBsNP+LgCcrRZeK6/+JPBh4vL1Bi8R06a/VKXs=
 github.com/ugorji/go/codec v1.2.11 h1:BMaWp1Bb6fHwEtbplGBGJ498wD+LKlNSl25MjdZY4dU=
 github.com/ugorji/go/codec v1.2.11/go.mod h1:UNopzCgEMSXjBc6AOMqYvWC1ktqTAfzJZUZgYf6w6lg=
 github.com/vmware-labs/yaml-jsonpath v0.3.2 h1:/5QKeCBGdsInyDCyVNLbXyilb61MXGi9NP674f9Hobk=
