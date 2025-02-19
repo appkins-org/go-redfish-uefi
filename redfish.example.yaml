@@ -6,3 +6,7 @@ unifi:
   endpoint: https://192.168.0.1
   site: "default"
   device: "aa:bb:dd:cc:ee:ff"
+tftp:
+  root_directory: /tftpboot
+  port: 69
+  address: "0.0.0.0"
