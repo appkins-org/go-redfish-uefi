@@ -275,6 +275,9 @@ func (r *RedfishServer) GetSystem(c *gin.Context, systemId string) {
 	resp := ComputerSystem{
 		Id:         &systemId,
 		PowerState: s.GetPowerState(),
+		Boot: &Boot{
+			BootSourceOverrideEnabled: ptr(BootSourceOverrideEnabledDisabled),
+		},
 		Actions: &ComputerSystemActions{
 			HashComputerSystemReset: &ComputerSystemReset{
 				ResetTypeRedfishAllowableValues: &[]ResetType{
