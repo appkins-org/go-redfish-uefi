@@ -58,7 +58,7 @@ func loadConfig(conf *Config) (err error) {
 	// handle (ignore the file) any errors
 	err = viper.ReadInConfig()
 	if err != nil {
-		return
+		return nil
 	}
 
 	err = viper.Unmarshal(conf)

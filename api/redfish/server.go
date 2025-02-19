@@ -235,7 +235,19 @@ func (r *RedfishServer) GetManagerVirtualMedia(c *gin.Context, managerId string,
 
 // GetRoot implements ServerInterface.
 func (r *RedfishServer) GetRoot(c *gin.Context) {
-	panic("unimplemented")
+
+	root := Root{
+		OdataId:        ptr("/redfish/v1"),
+		OdataType:      ptr("#ServiceRoot.v1_11_0.ServiceRoot"),
+		Id:             ptr("RootService"),
+		Name:           ptr("Root Service"),
+		RedfishVersion: ptr("1.11.0"),
+		Systems: &IdRef{
+			OdataId: ptr("/redfish/v1/Systems"),
+		},
+	}
+
+	c.JSON(200, &root)
 }
 
 // GetSoftwareInventory implements ServerInterface.
