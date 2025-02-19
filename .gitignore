@@ -1,3 +1,4 @@
 redfish.yaml
 # Added by goreleaser init:
 dist/
+tftpboot/

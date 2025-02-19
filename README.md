@@ -18,6 +18,16 @@ TFTP should exist here
 
 Power state should be web hook
 
+# !IMPORTANT!
+
+# Operates as a TFTP Server _ONLY_
+
+Point your DHCP TFTP address here to boot
+
 # Requirements
 
 Should contain method for power on and off + state
+
+# Other Options
+
+Deploy sidero metal

@@ -10,6 +10,7 @@ require (
 	github.com/google/go-cmp v0.6.0
 	github.com/oapi-codegen/oapi-codegen/v2 v2.4.1
 	github.com/oapi-codegen/runtime v1.1.1
+	github.com/pin/tftp v2.1.0+incompatible
 	github.com/pin/tftp/v3 v3.1.0
 	github.com/rwtodd/Go.Sed v0.0.0-20240405174034-bb8ed5da0fd0
 	github.com/spf13/afero v1.12.0

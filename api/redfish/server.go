@@ -19,6 +19,24 @@ func ptr[T any](v T) *T {
 	return &v
 }
 
+func (s *PowerState) GetPoeMode() string {
+	if s == nil {
+		return ""
+	}
+	switch *s {
+	case On:
+		return "auto"
+	case Off:
+		return "off"
+	case PoweringOff:
+		return "off"
+	case PoweringOn:
+		return "auto"
+	default:
+		return "off"
+	}
+}
+
 type RedfishServerConfig struct {
 	Insecure      bool
 	UnifiUser     string
@@ -167,6 +185,21 @@ func (r *RedfishServer) refreshSystems(ctx context.Context) (err error) {
 	return
 }
 
+func (r *RedfishServer) updateDevicePort(ctx context.Context, portIdx int, poeMode string) (device *unifi.Device, err error) {
+	device, err = r.client.GetDeviceByMAC(ctx, r.Config.UnifiSite, r.Config.UnifiDevice)
+	if err != nil {
+		return
+	}
+	for i, p := range device.PortOverrides {
+		if p.PortIDX == portIdx {
+			device.PortOverrides[i].PoeMode = poeMode
+			device.PortOverrides[i].StpPortMode = false
+		}
+	}
+	device, err = r.client.UpdateDevice(ctx, r.Config.UnifiSite, device)
+	return
+}
+
 func (r *RedfishServer) getPortState(ctx context.Context, macAddress string, p int) (deviceId string, port unifi.DevicePortOverrides, err error) {
 	dev, err := r.client.GetDeviceByMAC(ctx, "default", macAddress)
 	if err != nil {
@@ -215,6 +248,7 @@ func (r *RedfishServer) EjectVirtualMedia(c *gin.Context, managerId string, virt
 
 // FirmwareInventory implements ServerInterface.
 func (r *RedfishServer) FirmwareInventory(c *gin.Context) {
+
 	panic("unimplemented")
 }
 
@@ -275,13 +309,23 @@ func (r *RedfishServer) GetSystem(c *gin.Context, systemId string) {
 	resp := ComputerSystem{
 		Id:         &systemId,
 		PowerState: s.GetPowerState(),
+		Links: &SystemLinks{
+			Chassis:   &[]IdRef{{OdataId: ptr("/redfish/v1/Chassis/1")}},
+			ManagedBy: &[]IdRef{{OdataId: ptr("/redfish/v1/Managers/1")}},
+		},
 		Boot: &Boot{
-			BootSourceOverrideEnabled: ptr(BootSourceOverrideEnabledDisabled),
+			BootSourceOverrideEnabled: ptr(BootSourceOverrideEnabledContinuous),
+			BootSourceOverrideTarget:  ptr(None),
+			BootSourceOverrideTargetRedfishAllowableValues: &[]BootSource{
+				Pxe,
+				None,
+			},
 		},
 		Actions: &ComputerSystemActions{
 			HashComputerSystemReset: &ComputerSystemReset{
 				ResetTypeRedfishAllowableValues: &[]ResetType{
 					ResetTypeOn,
+					ResetTypeForceOn,
 					ResetTypeForceOff,
 					ResetTypePowerCycle,
 				},
@@ -374,56 +418,62 @@ func (r *RedfishServer) ResetSystem(c *gin.Context, systemId string) {
 		return
 	}
 
+	err = r.refreshSystems(c.Request.Context())
+	if err != nil {
+		c.JSON(500, redfishError(err))
+		return
+	}
+
 	sys, ok := r.Systems[int(systemIdInt)]
 	if !ok {
 		c.JSON(404, redfishError(fmt.Errorf("system not found")))
 		return
 	}
 
-	_, port, err := r.getPortState(c.Request.Context(), sys.DeviceMac, sys.UnifiPort)
-	if err != nil {
-		c.JSON(500, redfishError(err))
+	if sys.PoeMode == "off" {
+		_, err := r.updateDevicePort(c.Request.Context(), sys.UnifiPort, "auto")
+		if err != nil {
+			c.JSON(500, redfishError(err))
+			return
+		}
+		sys.PoeMode = "auto"
+	} else if *req.ResetType == ResetTypePowerCycle {
+		_, err := r.client.ExecuteCmd(c.Request.Context(), r.Config.UnifiSite, "devmgr", unifi.Cmd{
+			Command: "power-cycle",
+			MAC:     sys.DeviceMac,
+			PortIDX: ptr(sys.UnifiPort),
+		})
+		if err != nil {
+			c.JSON(500, redfishError(err))
+			return
+		}
+		c.Status(204)
 		return
-	}
-
-	if port.PoeMode == "auto" {
+	} else {
 		switch *req.ResetType {
-		case ResetTypeForceOff:
-			port.PoeMode = "off"
-			_, err := r.client.UpdateDevice(c.Request.Context(), r.Config.UnifiSite, &unifi.Device{
-				ID:            sys.DeviceMac,
-				PortOverrides: []unifi.DevicePortOverrides{port},
-			})
-			if err != nil {
-				c.JSON(500, redfishError(err))
-				return
-			}
-			c.JSON(204, nil)
-			return
 		case ResetTypeOn:
-			port.PoeMode = "auto"
-			_, err := r.client.UpdateDevice(c.Request.Context(), r.Config.UnifiSite, &unifi.Device{
-				ID:            sys.DeviceMac,
-				PortOverrides: []unifi.DevicePortOverrides{port},
-			})
+			_, err := r.updateDevicePort(c.Request.Context(), sys.UnifiPort, "auto")
 			if err != nil {
 				c.JSON(500, redfishError(err))
 				return
 			}
-			c.JSON(204, nil)
+			c.Status(204)
 			return
-
-		case ResetTypePowerCycle:
-			_, err := r.client.ExecuteCmd(c.Request.Context(), r.Config.UnifiSite, "devmgr", unifi.Cmd{
-				Command: "power-cycle",
-				MAC:     sys.DeviceMac,
-				PortIDX: ptr(sys.UnifiPort),
-			})
+		case ResetTypeForceOn:
+			_, err := r.updateDevicePort(c.Request.Context(), sys.UnifiPort, "auto")
 			if err != nil {
 				c.JSON(500, redfishError(err))
 				return
 			}
-			c.JSON(204, nil)
+			c.Status(204)
+			return
+		case ResetTypeForceOff:
+			_, err := r.updateDevicePort(c.Request.Context(), sys.UnifiPort, "off")
+			if err != nil {
+				c.JSON(500, redfishError(err))
+				return
+			}
+			c.Status(204)
 			return
 		}
 	}
@@ -445,32 +495,25 @@ func (r *RedfishServer) SetSystem(c *gin.Context, systemId string) {
 		return
 	}
 
+	err = r.refreshSystems(c.Request.Context())
+	if err != nil {
+		c.JSON(500, redfishError(err))
+		return
+	}
+
 	sys, ok := r.Systems[int(systemIdInt)]
 	if !ok {
 		c.JSON(404, redfishError(fmt.Errorf("system not found")))
 		return
 	}
 
-	if req.PowerState != sys.GetPowerState() {
-		_, port, err := r.getPortState(c.Request.Context(), sys.DeviceMac, sys.UnifiPort)
-		if err != nil {
-			c.JSON(500, redfishError(err))
-			return
-		}
+	poeMode := req.PowerState.GetPoeMode()
 
-		switch *req.PowerState {
-		case On:
-			sys.PoeMode = "auto"
-			port.PoeMode = "auto"
-		case Off:
-			sys.PoeMode = "off"
-			port.PoeMode = "off"
-		}
+	if poeMode != "" && poeMode != sys.PoeMode {
 
-		_, err = r.client.UpdateDevice(c.Request.Context(), r.Config.UnifiSite, &unifi.Device{
-			ID:            sys.DeviceMac,
-			PortOverrides: []unifi.DevicePortOverrides{port},
-		})
+		sys.PoeMode = poeMode
+
+		_, err := r.updateDevicePort(c.Request.Context(), sys.UnifiPort, sys.PoeMode)
 		if err != nil {
 			c.JSON(500, redfishError(err))
 			return
@@ -479,7 +522,7 @@ func (r *RedfishServer) SetSystem(c *gin.Context, systemId string) {
 
 	r.Systems[int(systemIdInt)] = sys
 
-	c.JSON(200, &sys)
+	c.JSON(204, nil)
 }
 
 // UpdateService implements ServerInterface.
