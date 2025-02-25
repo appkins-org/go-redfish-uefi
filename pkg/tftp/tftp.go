@@ -1,24 +1,27 @@
 package tftp
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/netip"
 	"os"
-	"path"
 	"path/filepath"
-	"regexp"
 	"strings"
 
+	log "github.com/sirupsen/logrus"
+
 	"github.com/pin/tftp/v3"
-	"go.opentelemetry.io/otel/trace"
+	"github.com/tinkerbell/ipxedust/binary"
 )
 
 type Handler struct {
 	ctx           context.Context
 	RootDirectory string
+	Patch         string
 }
 
 // ListenAndServe sets up the listener on the given address and serves TFTP requests.
@@ -41,57 +44,91 @@ func Serve(_ context.Context, conn net.PacketConn, s *tftp.Server) error {
 }
 
 // HandleRead handlers TFTP GET requests. The function signature satisfies the tftp.Server.readHandler parameter type.
-func (h *Handler) HandleRead(filename string, rf io.ReaderFrom) error {
-	root, err := os.OpenRoot(h.RootDirectory)
+func (h *Handler) HandleRead(fullfilepath string, rf io.ReaderFrom) error {
+	content, ok := binary.Files[filepath.Base(fullfilepath)]
+	if ok {
+		return h.HandleIpxeRead(fullfilepath, rf, content)
+	}
+
+	root, err := OpenRoot(h.RootDirectory)
 	if err != nil {
+		log.Errorf("opening root directory %s: %v\n", h.RootDirectory, err)
 		return fmt.Errorf("opening root directory %s: %w", h.RootDirectory, err)
 	}
 	defer root.Close()
 
-	if _, err := root.Stat(filename); err == nil {
+	parts := strings.Split(fullfilepath, "/")
+
+	filename := parts[len(parts)-1]
+	filedir := strings.Join(parts[:len(parts)-1], "/")
+	firstDir := filedir
+	if len(parts) > 1 {
+		firstDir = parts[0]
+	}
+
+	if _, err := net.ParseMAC(firstDir); err == nil {
+		rootpath := filename
+		if len(parts) > 2 {
+			rootpath = strings.Join(parts[1:], "/")
+		}
+
+		childExists := false
+		if !root.Exists(filedir) {
+			log.Infof("creating directories for %s", rootpath)
+			// If the mac address directory does not exist, create it.
+			err := root.MkdirAll(filedir, 0755)
+			if err != nil {
+				log.Errorf("creating %s: %v\n", filedir, err)
+				return fmt.Errorf("creating %s: %w", filedir, err)
+			}
+		} else {
+			childExists = root.Exists(fullfilepath)
+		}
+
+		if root.Exists(rootpath) && !childExists {
+			// If the file exists in the new path, but not in the old path, use the new path.
+			// This is to support the old path for backwards compatibility.
+			newF, err := root.Create(fullfilepath)
+			if err != nil {
+				log.Errorf("creating %s: %v\n", filename, err)
+				return fmt.Errorf("creating %s: %w", filename, err)
+			}
+			defer newF.Close()
+			oldF, err := root.Open(rootpath)
+			if err != nil {
+				log.Errorf("opening %s: %v\n", rootpath, err)
+				return fmt.Errorf("opening %s: %w", rootpath, err)
+			}
+			defer oldF.Close()
+			_, err = io.Copy(newF, oldF)
+			if err != nil {
+				log.Errorf("copying %s to %s: %v\n", rootpath, filename, err)
+				return fmt.Errorf("copying %s to %s: %w", rootpath, filename, err)
+			}
+		}
+	}
+
+	if _, err := root.Stat(fullfilepath); err == nil {
 		// file exists
-		file, err := root.Open(filename)
+		file, err := root.Open(fullfilepath)
 		if err != nil {
-			fmt.Printf("opening %s: %w", filename, err)
-			return nil
+			errMsg := fmt.Sprintf("opening %s: %s", fullfilepath, err.Error())
+			log.Error(errMsg)
+			return errors.New(errMsg)
 		}
 		n, err := rf.ReadFrom(file)
 		if err != nil {
-			fmt.Printf("reading %s: %w", filename, err)
-			return nil
+			errMsg := fmt.Sprintf("reading %s: %s", fullfilepath, err.Error())
+			log.Error(errMsg)
+			return errors.New(errMsg)
 		}
-		fmt.Printf("%d bytes sent\n", n)
+		log.Infof("%d bytes sent\n", n)
 		return nil
 
-	} else if _, err := net.ParseMAC(path.Dir(filename)); err == nil {
-		// If a mac address is provided, use it to find the binary.
-		filepaths := strings.Split(filename, "/")
-		if len(filepaths) > 1 {
-			filepaths = filepaths[1:]
-		}
-
-		newFp := filepath.Join(filepaths...)
-
-		if _, err := root.Stat(newFp); err == nil {
-			file, err := root.Open(newFp)
-			if err != nil {
-				fmt.Printf("opening %s: %w", newFp, err)
-				return nil
-			}
-			n, err := rf.ReadFrom(file)
-			if err != nil {
-				fmt.Printf("reading %s: %w", newFp, err)
-				return nil
-			}
-			fmt.Printf("%d bytes sent\n", n)
-			return nil
-		} else {
-			fmt.Printf("file not found: %v\n", newFp)
-			return nil
-		}
 	} else {
-		fmt.Printf("error checking if file exists: %v\n", err)
-		return nil
+		errMsg := fmt.Sprintf("error checking if file exists: %s", fullfilepath)
+		log.Error(errMsg)
+		return errors.New(errMsg)
 	}
 
 	// content, ok := binary.Files[filepath.Base(shortfile)]
@@ -123,6 +160,24 @@ func (h *Handler) HandleRead(filename string, rf io.ReaderFrom) error {
 	return nil
 }
 
+func (h *Handler) HandleIpxeRead(filename string, rf io.ReaderFrom, content []byte) error {
+	content, err := binary.Patch(content, []byte(h.Patch))
+	if err != nil {
+		log.Error(err, "failed to patch binary")
+		return err
+	}
+
+	ct := bytes.NewReader(content)
+	b, err := rf.ReadFrom(ct)
+	if err != nil {
+		log.Error(err, "file serve failed", "b", b, "contentSize", len(content))
+		return err
+	}
+	log.Info("file served", "bytesSent", b, "contentSize", len(content))
+
+	return nil
+}
+
 // HandleWrite handles TFTP PUT requests. It will always return an error. This library does not support PUT.
 func (h *Handler) HandleWrite(filename string, wt io.WriterTo) error {
 	root, err := os.OpenRoot(h.RootDirectory)
@@ -133,15 +188,15 @@ func (h *Handler) HandleWrite(filename string, wt io.WriterTo) error {
 
 	file, err := root.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "creating %s: %v\n", filename, err)
+		log.Errorf("opening %s: %v\n", filename, err)
 		return nil
 	}
 	n, err := wt.WriteTo(file)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "writing %s: %v\n", filename, err)
+		log.Errorf("writing %s: %v\n", filename, err)
 		return nil
 	}
-	fmt.Printf("%d bytes received\n", n)
+	log.Infof("%d bytes received", n)
 	return nil
 
 	// err := fmt.Errorf("access_violation: %w", os.ErrPermission)
@@ -152,39 +207,4 @@ func (h *Handler) HandleWrite(filename string, wt io.WriterTo) error {
 	// t.Log.Error(err, "client", client, "event", "put", "filename", filename)
 
 	// return err
-}
-
-// extractTraceparentFromFilename takes a context and filename and checks the filename for
-// a traceparent tacked onto the end of it. If there is a match, the traceparent is extracted
-// and a new SpanContext is contstructed and added to the context.Context that is returned.
-// The filename is shortened to just the original filename so the rest of boots tftp can
-// carry on as usual.
-func extractTraceparentFromFilename(ctx context.Context, filename string) (context.Context, string, error) {
-	// traceparentRe captures 4 items, the original filename, the trace id, span id, and trace flags
-	traceparentRe := regexp.MustCompile("^(.*)-[[:xdigit:]]{2}-([[:xdigit:]]{32})-([[:xdigit:]]{16})-([[:xdigit:]]{2})")
-	parts := traceparentRe.FindStringSubmatch(filename)
-	if len(parts) == 5 {
-		traceID, err := trace.TraceIDFromHex(parts[2])
-		if err != nil {
-			return ctx, filename, fmt.Errorf("parsing OpenTelemetry trace id %q failed: %w", parts[2], err)
-		}
-
-		spanID, err := trace.SpanIDFromHex(parts[3])
-		if err != nil {
-			return ctx, filename, fmt.Errorf("parsing OpenTelemetry span id %q failed: %w", parts[3], err)
-		}
-
-		// create a span context with the parent trace id & span id
-		spanCtx := trace.NewSpanContext(trace.SpanContextConfig{
-			TraceID:    traceID,
-			SpanID:     spanID,
-			Remote:     true,
-			TraceFlags: trace.FlagsSampled, // TODO: use the parts[4] value instead
-		})
-
-		// inject it into the context.Context and return it along with the original filename
-		return trace.ContextWithSpanContext(ctx, spanCtx), parts[1], nil
-	}
-	// no traceparent found, return everything as it was
-	return ctx, filename, nil
 }

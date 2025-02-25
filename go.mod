@@ -1,6 +1,6 @@
 module github.com/appkins-org/go-redfish-uefi
 
-go 1.23.5
+go 1.24.0
 
 require (
 	github.com/0x5a17ed/uefi v0.7.0
@@ -10,11 +10,12 @@ require (
 	github.com/oapi-codegen/runtime v1.1.1
 	github.com/pin/tftp/v3 v3.1.0
 	github.com/rwtodd/Go.Sed v0.0.0-20240405174034-bb8ed5da0fd0
+	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/afero v1.12.0
 	github.com/spf13/viper v1.19.0
 	github.com/squarefactory/ipmitool v0.0.0-20230411131013-f36f270ea246
+	github.com/tinkerbell/ipxedust v0.0.0-20250129162407-3c29a914f8be
 	github.com/ubiquiti-community/go-unifi v1.33.7
-	go.opentelemetry.io/otel/trace v1.32.0
 	go.uber.org/multierr v1.11.0
 	golang.org/x/sys v0.29.0
 )
@@ -65,7 +66,6 @@ require (
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.2.11 // indirect
 	github.com/vmware-labs/yaml-jsonpath v0.3.2 // indirect
-	go.opentelemetry.io/otel v1.32.0 // indirect
 	golang.org/x/arch v0.4.0 // indirect
 	golang.org/x/crypto v0.32.0 // indirect
 	golang.org/x/exp v0.0.0-20240909161429-701f63a606c0 // indirect
