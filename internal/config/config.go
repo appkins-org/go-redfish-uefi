@@ -9,6 +9,8 @@ import (
 	"github.com/spf13/viper"
 )
 
+const ipxePatchDefault = "set user-class iPXE"
+
 type UnifiConfig struct {
 	Username string `yaml:"username" mapstructure:"username"`
 	Password string `yaml:"password" mapstructure:"password"`
@@ -21,14 +23,16 @@ type TftpConfig struct {
 	Address       string `yaml:"address" mapstructure:"address"`
 	Port          int    `yaml:"port" mapstructure:"port"`
 	RootDirectory string `yaml:"root_directory" mapstructure:"root_directory"`
+	IpxePatch     string `yaml:"ipxe_patch" mapstructure:"ipxe_patch"`
 }
 
 type Config struct {
-	Address string                           `yaml:"address" mapstructure:"address"`
-	Port    int                              `yaml:"port" mapstructure:"port"`
-	Unifi   UnifiConfig                      `yaml:"unifi" mapstructure:"unifi"`
-	Tftp    TftpConfig                       `yaml:"tftp" mapstructure:"tftp"`
-	Systems map[string]redfish.RedfishSystem `yaml:"systems" mapstructure:"systems"`
+	Address  string                           `yaml:"address" mapstructure:"address"`
+	Port     int                              `yaml:"port" mapstructure:"port"`
+	Unifi    UnifiConfig                      `yaml:"unifi" mapstructure:"unifi"`
+	Tftp     TftpConfig                       `yaml:"tftp" mapstructure:"tftp"`
+	Systems  map[string]redfish.RedfishSystem `yaml:"systems" mapstructure:"systems"`
+	LogLevel string                           `yaml:"log_level" mapstructure:"log_level"`
 }
 
 func NewConfig() (conf *Config, err error) {
@@ -39,6 +43,9 @@ func NewConfig() (conf *Config, err error) {
 	viper.AddConfigPath("/app/")
 	viper.AddConfigPath("/config/")
 	viper.AddConfigPath(".")
+
+	viper.SetDefault("tftp.ipxe_patch", ipxePatchDefault)
+	viper.SetDefault("log_level", "info")
 
 	viper.SetConfigType("yaml")
 

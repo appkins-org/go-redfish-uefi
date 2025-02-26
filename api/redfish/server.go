@@ -7,11 +7,15 @@ import (
 	"net"
 	"net/http"
 	"net/http/cookiejar"
+	"os"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/appkins-org/go-redfish-uefi/internal/firmware/varstore"
 	"github.com/gin-gonic/gin"
+	"github.com/go-logr/logr"
 	"github.com/ubiquiti-community/go-unifi/unifi"
 )
 
@@ -44,15 +48,18 @@ type RedfishServerConfig struct {
 	UnifiEndpoint string
 	UnifiSite     string
 	UnifiDevice   string
+	Logger        logr.Logger
+	TftpRoot      string
 }
 
 type RedfishSystem struct {
-	MacAddress string `yaml:"mac"`
-	IpAddress  string `yaml:"ip"`
-	UnifiPort  int    `yaml:"port"`
-	SiteID     string `yaml:"site"`
-	DeviceMac  string `yaml:"device_mac"`
-	PoeMode    string `yaml:"poe_mode"`
+	MacAddress       string `yaml:"mac"`
+	IpAddress        string `yaml:"ip"`
+	UnifiPort        int    `yaml:"port"`
+	SiteID           string `yaml:"site"`
+	DeviceMac        string `yaml:"device_mac"`
+	PoeMode          string `yaml:"poe_mode"`
+	EfiVariableStore *varstore.EfiVariableStore
 }
 
 func (r *RedfishSystem) GetPowerState() *PowerState {
@@ -83,9 +90,11 @@ type RedfishServer struct {
 	Config *RedfishServerConfig
 
 	client *unifi.Client
+
+	Logger logr.Logger
 }
 
-func NewRedfishServer(cfg RedfishServerConfig) ServerInterface {
+func NewRedfishServer(cfg RedfishServerConfig) *RedfishServer {
 	client := unifi.Client{}
 
 	if err := client.SetBaseURL(cfg.UnifiEndpoint); err != nil {
@@ -126,6 +135,7 @@ func NewRedfishServer(cfg RedfishServerConfig) ServerInterface {
 		Systems: rfSystems,
 		client:  &client,
 		Config:  &cfg,
+		Logger:  cfg.Logger,
 	}
 
 	server.refreshSystems(context.Background())
@@ -176,6 +186,13 @@ func (r *RedfishServer) refreshSystems(ctx context.Context) (err error) {
 
 				sys.MacAddress = c.Mac
 				sys.IpAddress = c.IP
+
+				firmware := strings.Join([]string{r.Config.TftpRoot, sys.MacAddress, "RPI_EFI.fd"}, string(os.PathSeparator))
+
+				sys.EfiVariableStore, err = varstore.NewEfiVariableStore(firmware)
+				if err != nil {
+					r.Logger.Error(err, "failed to create EFI variable store", "firmware", firmware)
+				}
 
 				r.Systems[c.SwPort] = sys
 			}

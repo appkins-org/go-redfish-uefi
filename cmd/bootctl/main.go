@@ -15,66 +15,44 @@
 package main
 
 import (
-	"errors"
 	"fmt"
-	"os"
-	"syscall"
 
 	"github.com/0x5a17ed/uefi/efi/efiguid"
-	"github.com/0x5a17ed/uefi/efi/efivario"
-	"github.com/0x5a17ed/uefi/efi/efivars"
-
-	"github.com/spf13/afero"
 )
-
-func openSafeguard(fs afero.Fs, fpath string) (p *safeguard, err error) {
-	f, err := fs.OpenFile(fpath, os.O_RDONLY, 0644)
-	if err != nil {
-		switch {
-		case errors.Is(err, afero.ErrFileNotFound):
-			fallthrough
-		case errors.Is(err, syscall.ENOENT):
-			return nil, nil
-		default:
-			return nil, err
-		}
-	}
-
-	osFile, ok := resolveOsFile(f)
-	if !ok {
-		// The protection operation is not implemented by the
-		// underlying filesystem and thus can't be performed.
-		return nil, f.Close()
-	}
-
-	p = &safeguard{File: osFile}
-	err = withInnerFileDescriptor(osFile, func(fd uintptr) (err error) {
-		p.fl, err = getFlags(fd)
-		return
-	})
-	return
-}
-
-const (
-	DefaultEfiPath = "/Users/atkini01/rpi4"
-)
-
-func NewContext(path string) efivario.Context {
-	return efivario.NewFileSystemContext(afero.NewBasePathFs(afero.NewOsFs(), path))
-}
 
 func main() {
 
 	c := NewContext(DefaultEfiPath)
 
-	_, a, err := efivario.ReadAll(c, "RPI_EFI.fd", efiguid.MustFromString("eb704011-1402-11d3-8e77-00a0c969723b"))
+	c.Get("RPI_EFI.fd", efiguid.MustFromString("eb704011-1402-11d3-8e77-00a0c969723b"), nil)
+
+	// _, a, err := ReadAll(c, "RPI_EFI.fd", efiguid.MustFromString("eb704011-1402-11d3-8e77-00a0c969723b"))
+	// if err != nil {
+	// 	fmt.Println(err)
+	// }
+
+	// fmt.Println(a)
+
+	// if err := BootNext.Set(c, 1); err != nil {
+	// 	fmt.Println(err)
+	// }
+
+	v, err := c.VariableNames()
 	if err != nil {
 		fmt.Println(err)
 	}
 
-	fmt.Println(a)
+	for v.Next() {
+		fmt.Println(v.Value())
+	}
 
-	if err := efivars.BootNext.Set(c, 1); err != nil {
+	bootNext := []byte{}
+
+	_, _, err = c.Get("BootNext", efiguid.MustFromString("eb704011-1402-11d3-8e77-00a0c969723b"), bootNext)
+	if err != nil {
 		fmt.Println(err)
 	}
+
+	fmt.Println(bootNext)
+
 }

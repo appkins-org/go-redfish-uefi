@@ -7,25 +7,44 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/appkins-org/go-redfish-uefi/internal/rpi4"
+	"github.com/go-logr/logr"
 
 	"github.com/pin/tftp/v3"
 	"github.com/tinkerbell/ipxedust/binary"
 )
 
+type Server struct {
+	Logger        logr.Logger
+	RootDirectory string
+	Patch         string
+	Log           logr.Logger
+}
+
 type Handler struct {
 	ctx           context.Context
 	RootDirectory string
 	Patch         string
+	Log           logr.Logger
 }
 
 // ListenAndServe sets up the listener on the given address and serves TFTP requests.
-func ListenAndServe(ctx context.Context, addr netip.AddrPort, s *tftp.Server) error {
+func (r *Server) ListenAndServe(ctx context.Context, addr netip.AddrPort) error {
+	tftpHandler := &Handler{
+		ctx:           ctx,
+		RootDirectory: r.RootDirectory,
+		Patch:         r.Patch,
+		Log:           r.Logger,
+	}
+
+	s := tftp.NewServer(tftpHandler.HandleRead, tftpHandler.HandleWrite)
+
 	a, err := net.ResolveUDPAddr("udp", addr.String())
 	if err != nil {
 		return err
@@ -35,7 +54,20 @@ func ListenAndServe(ctx context.Context, addr netip.AddrPort, s *tftp.Server) er
 		return err
 	}
 
-	return Serve(ctx, conn, s)
+	go func() {
+		<-ctx.Done()
+		r.Logger.Info("shutting down http server")
+		s.Shutdown()
+	}()
+	if err := Serve(ctx, conn, s); err != nil {
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		r.Logger.Error(err, "listen and serve http")
+		return err
+	}
+
+	return nil
 }
 
 // Serve serves TFTP requests using the given conn and server.
@@ -52,7 +84,7 @@ func (h *Handler) HandleRead(fullfilepath string, rf io.ReaderFrom) error {
 
 	root, err := OpenRoot(h.RootDirectory)
 	if err != nil {
-		log.Errorf("opening root directory %s: %v\n", h.RootDirectory, err)
+		h.Log.Error(err, "opening root directory failed", "rootDirectory", h.RootDirectory)
 		return fmt.Errorf("opening root directory %s: %w", h.RootDirectory, err)
 	}
 	defer root.Close()
@@ -74,36 +106,44 @@ func (h *Handler) HandleRead(fullfilepath string, rf io.ReaderFrom) error {
 
 		childExists := false
 		if !root.Exists(filedir) {
-			log.Infof("creating directories for %s", rootpath)
+			h.Log.Info("creating directories for %s", rootpath)
 			// If the mac address directory does not exist, create it.
 			err := root.MkdirAll(filedir, 0755)
 			if err != nil {
-				log.Errorf("creating %s: %v\n", filedir, err)
+				h.Log.Error(err, "creating directory failed", "directory", filedir)
 				return fmt.Errorf("creating %s: %w", filedir, err)
 			}
 		} else {
 			childExists = root.Exists(fullfilepath)
 		}
 
-		if root.Exists(rootpath) && !childExists {
-			// If the file exists in the new path, but not in the old path, use the new path.
-			// This is to support the old path for backwards compatibility.
-			newF, err := root.Create(fullfilepath)
-			if err != nil {
-				log.Errorf("creating %s: %v\n", filename, err)
-				return fmt.Errorf("creating %s: %w", filename, err)
-			}
-			defer newF.Close()
-			oldF, err := root.Open(rootpath)
-			if err != nil {
-				log.Errorf("opening %s: %v\n", rootpath, err)
-				return fmt.Errorf("opening %s: %w", rootpath, err)
-			}
-			defer oldF.Close()
-			_, err = io.Copy(newF, oldF)
-			if err != nil {
-				log.Errorf("copying %s to %s: %v\n", rootpath, filename, err)
-				return fmt.Errorf("copying %s to %s: %w", rootpath, filename, err)
+		if !childExists {
+			rootExists := root.Exists(rootpath)
+
+			if rootExists {
+				// If the file exists in the new path, but not in the old path, use the new path.
+				// This is to support the old path for backwards compatibility.
+				newF, err := root.Create(fullfilepath)
+				if err != nil {
+					h.Log.Error(err, "creating file failed", "filename", filename)
+					return fmt.Errorf("creating %s: %w", filename, err)
+				}
+				defer newF.Close()
+				oldF, err := root.Open(rootpath)
+				if err != nil {
+					h.Log.Error(err, "opening file failed", "filename", rootpath)
+					return fmt.Errorf("opening %s: %w", rootpath, err)
+				}
+				defer oldF.Close()
+				_, err = io.Copy(newF, oldF)
+				if err != nil {
+					h.Log.Error(err, "copying file failed", "filename", rootpath)
+					return fmt.Errorf("copying %s to %s: %w", rootpath, filename, err)
+				}
+			} else if content, ok := rpi4.Files[rootpath]; ok {
+				if err := h.createFile(root, fullfilepath, content); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -113,35 +153,43 @@ func (h *Handler) HandleRead(fullfilepath string, rf io.ReaderFrom) error {
 		file, err := root.Open(fullfilepath)
 		if err != nil {
 			errMsg := fmt.Sprintf("opening %s: %s", fullfilepath, err.Error())
-			log.Error(errMsg)
+			h.Log.Error(err, "file open failed")
 			return errors.New(errMsg)
 		}
 		n, err := rf.ReadFrom(file)
 		if err != nil {
 			errMsg := fmt.Sprintf("reading %s: %s", fullfilepath, err.Error())
-			log.Error(errMsg)
+			h.Log.Error(err, "file read failed")
 			return errors.New(errMsg)
 		}
-		log.Infof("%d bytes sent\n", n)
+		h.Log.Info("bytes sent", n)
 		return nil
 
+	} else if content, ok := rpi4.Files[fullfilepath]; ok {
+		ct := bytes.NewReader(content)
+		b, err := rf.ReadFrom(ct)
+		if err != nil {
+			h.Log.Error(err, "file serve failed", "b", b, "contentSize", len(content))
+			return err
+		}
+		h.Log.Info("file served", "bytesSent", b, "contentSize", len(content))
 	} else {
 		errMsg := fmt.Sprintf("error checking if file exists: %s", fullfilepath)
-		log.Error(errMsg)
+		h.Log.Error(err, errMsg)
 		return errors.New(errMsg)
 	}
 
 	// content, ok := binary.Files[filepath.Base(shortfile)]
 	// if !ok {
 	// 	err := fmt.Errorf("file [%v] unknown: %w", filepath.Base(shortfile), os.ErrNotExist)
-	// 	log.Error(err, "file unknown")
+	// 	h.Log.Error(err, "file unknown")
 	// 	span.SetStatus(codes.Error, err.Error())
 	// 	return err
 	// }
 
 	// content, err = binary.Patch(content, t.Patch)
 	// if err != nil {
-	// 	log.Error(err, "failed to patch binary")
+	// 	h.Log.Error(err, "failed to patch binary")
 	// 	span.SetStatus(codes.Error, err.Error())
 	// 	return err
 	// }
@@ -149,13 +197,30 @@ func (h *Handler) HandleRead(fullfilepath string, rf io.ReaderFrom) error {
 	// ct := bytes.NewReader(content)
 	// b, err := rf.ReadFrom(ct)
 	// if err != nil {
-	// 	log.Error(err, "file serve failed", "b", b, "contentSize", len(content))
+	// 	h.Log.Error(err, "file serve failed", "b", b, "contentSize", len(content))
 	// 	span.SetStatus(codes.Error, err.Error())
 
 	// 	return err
 	// }
-	// log.Info("file served", "bytesSent", b, "contentSize", len(content))
+	// h.Log.Info("file served", "bytesSent", b, "contentSize", len(content))
 	// span.SetStatus(codes.Ok, filename)
+
+	return nil
+}
+
+func (h *Handler) createFile(root *Root, filename string, content []byte) error {
+	// If the file does not exist in the new path, but exists in the rpi4.Files map, use the map.
+	newF, err := root.Create(filename)
+	if err != nil {
+		h.Log.Error(err, "creating file failed", "filename", filename)
+		return fmt.Errorf("creating %s: %w", filename, err)
+	}
+	defer newF.Close()
+	_, err = newF.Write(content)
+	if err != nil {
+		h.Log.Error(err, "writing file failed", "filename", filename)
+		return fmt.Errorf("writing %s: %w", filename, err)
+	}
 
 	return nil
 }
@@ -163,17 +228,17 @@ func (h *Handler) HandleRead(fullfilepath string, rf io.ReaderFrom) error {
 func (h *Handler) HandleIpxeRead(filename string, rf io.ReaderFrom, content []byte) error {
 	content, err := binary.Patch(content, []byte(h.Patch))
 	if err != nil {
-		log.Error(err, "failed to patch binary")
+		h.Log.Error(err, "failed to patch binary")
 		return err
 	}
 
 	ct := bytes.NewReader(content)
 	b, err := rf.ReadFrom(ct)
 	if err != nil {
-		log.Error(err, "file serve failed", "b", b, "contentSize", len(content))
+		h.Log.Error(err, "file serve failed", "b", b, "contentSize", len(content))
 		return err
 	}
-	log.Info("file served", "bytesSent", b, "contentSize", len(content))
+	h.Log.Info("file served", "bytesSent", b, "contentSize", len(content))
 
 	return nil
 }
@@ -182,21 +247,22 @@ func (h *Handler) HandleIpxeRead(filename string, rf io.ReaderFrom, content []by
 func (h *Handler) HandleWrite(filename string, wt io.WriterTo) error {
 	root, err := os.OpenRoot(h.RootDirectory)
 	if err != nil {
+		h.Log.Error(err, "opening root directory failed", "rootDirectory", h.RootDirectory)
 		return fmt.Errorf("opening root directory %s: %w", h.RootDirectory, err)
 	}
 	defer root.Close()
 
 	file, err := root.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
-		log.Errorf("opening %s: %v\n", filename, err)
+		h.Log.Error(err, "opening file failed", "filename", filename)
 		return nil
 	}
 	n, err := wt.WriteTo(file)
 	if err != nil {
-		log.Errorf("writing %s: %v\n", filename, err)
+		h.Log.Error(err, "writing file failed", "filename", filename)
 		return nil
 	}
-	log.Infof("%d bytes received", n)
+	h.Log.Info("bytes received", n)
 	return nil
 
 	// err := fmt.Errorf("access_violation: %w", os.ErrPermission)

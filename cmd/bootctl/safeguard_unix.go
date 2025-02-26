@@ -1,3 +1,5 @@
+//go:build unix
+
 package main
 
 import (
@@ -12,6 +14,8 @@ import (
 
 const (
 	FS_IMMUTABLE_FL = 0x00000010
+	FS_IOC_GETFLAGS = 0x80086601
+	FS_IOC_SETFLAGS = 0x40086602
 )
 
 type flags uint32
@@ -21,12 +25,12 @@ func (a flags) Clear(attrs flags) flags { return a & ^attrs }
 func (a flags) Set(attrs flags) flags   { return a | attrs }
 
 func getFlags(fd uintptr) (flags, error) {
-	attrs, err := unix.IoctlGetInt(int(fd), unix.FS_IOC_GETFLAGS)
+	attrs, err := unix.IoctlGetInt(int(fd), FS_IOC_GETFLAGS)
 	return flags(attrs), err
 }
 
 func setFlags(fd uintptr, attr flags) error {
-	return unix.IoctlSetPointerInt(int(fd), unix.FS_IOC_SETFLAGS, int(attr))
+	return unix.IoctlSetPointerInt(int(fd), FS_IOC_SETFLAGS, int(attr))
 }
 
 func resolveOsFile(f afero.File) (o *os.File, ok bool) {
@@ -84,4 +88,32 @@ func (g *safeguard) enable() error {
 		g.fl = g.fl.Set(FS_IMMUTABLE_FL)
 		return setFlags(fd, g.fl)
 	})
+}
+
+func openSafeguard(fs afero.Fs, fpath string) (p *safeguard, err error) {
+	f, err := fs.OpenFile(fpath, os.O_RDONLY, 0644)
+	if err != nil {
+		switch {
+		case errors.Is(err, afero.ErrFileNotFound):
+			fallthrough
+		case errors.Is(err, syscall.ENOENT):
+			return nil, nil
+		default:
+			return nil, err
+		}
+	}
+
+	osFile, ok := resolveOsFile(f)
+	if !ok {
+		// The protection operation is not implemented by the
+		// underlying filesystem and thus can't be performed.
+		return nil, f.Close()
+	}
+
+	p = &safeguard{File: osFile}
+	err = withInnerFileDescriptor(osFile, func(fd uintptr) (err error) {
+		p.fl, err = getFlags(fd)
+		return
+	})
+	return
 }
