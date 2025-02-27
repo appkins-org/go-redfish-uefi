@@ -2,6 +2,7 @@ package config
 
 import (
 	"log"
+	"net"
 	"strings"
 
 	"github.com/appkins-org/go-redfish-uefi/api/redfish"
@@ -26,11 +27,30 @@ type TftpConfig struct {
 	IpxePatch     string `yaml:"ipxe_patch" mapstructure:"ipxe_patch"`
 }
 
+type IpxeUrl struct {
+	Address string `yaml:"address" mapstructure:"address"`
+	Port    int    `yaml:"port" mapstructure:"port"`
+	Scheme  string `yaml:"scheme" mapstructure:"scheme"`
+	Path    string `yaml:"path" mapstructure:"path"`
+}
+
+type DhcpConfig struct {
+	Interface         string  `yaml:"interface" mapstructure:"interface"`
+	Address           string  `yaml:"address" mapstructure:"address"`
+	Port              int     `yaml:"port" mapstructure:"port"`
+	IpxeBinaryUrl     IpxeUrl `yaml:"ipxe_binary_url" mapstructure:"ipxe_binary_url"`
+	IpxeHttpUrl       IpxeUrl `yaml:"ipxe_http_url" mapstructure:"ipxe_http_url"`
+	IpxeHttpScriptURL string  `yaml:"ipxe_http_script_url" mapstructure:"ipxe_http_script_url"`
+	TftpAddress       string  `yaml:"tftp_address" mapstructure:"tftp_address"`
+	TftpPort          int     `yaml:"tftp_port" mapstructure:"tftp_port"`
+}
+
 type Config struct {
 	Address  string                           `yaml:"address" mapstructure:"address"`
 	Port     int                              `yaml:"port" mapstructure:"port"`
 	Unifi    UnifiConfig                      `yaml:"unifi" mapstructure:"unifi"`
 	Tftp     TftpConfig                       `yaml:"tftp" mapstructure:"tftp"`
+	Dhcp     DhcpConfig                       `yaml:"dhcp" mapstructure:"dhcp"`
 	Systems  map[string]redfish.RedfishSystem `yaml:"systems" mapstructure:"systems"`
 	LogLevel string                           `yaml:"log_level" mapstructure:"log_level"`
 }
@@ -38,13 +58,41 @@ type Config struct {
 func NewConfig() (conf *Config, err error) {
 	conf = &Config{}
 
+	defaultIp, defaultIface, _ := GetLocalIP()
+
 	viper.SetConfigName("redfish")
 
 	viper.AddConfigPath("/app/")
 	viper.AddConfigPath("/config/")
 	viper.AddConfigPath(".")
 
+	viper.SetDefault("address", "0.0.0.0")
+	viper.SetDefault("port", 8080)
+	viper.SetDefault("unifi.username", "")
+	viper.SetDefault("unifi.password", "")
+	viper.SetDefault("unifi.endpoint", "")
+	viper.SetDefault("unifi.site", "")
+	viper.SetDefault("unifi.device", "")
+	viper.SetDefault("tftp.address", "0.0.0.0")
+	viper.SetDefault("tftp.port", 69)
+	viper.SetDefault("tftp.root_directory", "/tftpboot")
 	viper.SetDefault("tftp.ipxe_patch", ipxePatchDefault)
+
+	viper.SetDefault("dhcp.interface", defaultIface)
+	viper.SetDefault("dhcp.address", "0.0.0.0")
+	viper.SetDefault("dhcp.port", 67)
+	viper.SetDefault("dhcp.ipxe_http_script_url", "")
+	viper.SetDefault("dhcp.ipxe_binary_url.address", defaultIp)
+	viper.SetDefault("dhcp.ipxe_binary_url.port", 80)
+	viper.SetDefault("dhcp.ipxe_binary_url.scheme", "http")
+	viper.SetDefault("dhcp.ipxe_binary_url.path", "/ipxe.efi")
+	viper.SetDefault("dhcp.ipxe_http_url.address", defaultIp)
+	viper.SetDefault("dhcp.ipxe_http_url.port", 80)
+	viper.SetDefault("dhcp.ipxe_http_url.scheme", "http")
+	viper.SetDefault("dhcp.ipxe_http_url.path", "/ipxe.efi")
+	viper.SetDefault("dhcp.tftp_address", defaultIp)
+	viper.SetDefault("dhcp.tftp_port", 69)
+
 	viper.SetDefault("log_level", "info")
 
 	viper.SetConfigType("yaml")
@@ -93,4 +141,38 @@ func loadConfig(conf *Config) (err error) {
 	}
 
 	return
+}
+
+func GetLocalIP() (string, string, error) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return "", "", err
+	}
+	// handle err
+	for _, i := range ifaces {
+		addrs, err := i.Addrs()
+
+		if err != nil {
+			return "", "", err
+		}
+
+		// handle err
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+
+			if !ip.IsLoopback() {
+				if ip.To4() != nil {
+					return ip.String(), i.Name, nil
+				}
+			}
+		}
+	}
+
+	return "", "", nil
 }

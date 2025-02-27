@@ -181,6 +181,17 @@ func (i Info) UserClassFrom() UserClass {
 	return u
 }
 
+func (i Info) VendorClassFrom() string {
+	var v string
+	if i.Pkt != nil {
+		if val := i.Pkt.Options.Get(dhcpv4.OptionVendorIdentifyingVendorClass); val != nil {
+			v = string(val)
+		}
+	}
+
+	return v
+}
+
 func (i Info) ClientTypeFrom() ClientType {
 	var c ClientType
 	if i.Pkt != nil {
@@ -276,7 +287,8 @@ func (i Info) Bootfile(customUC UserClass, ipxeScript, ipxeHTTPBinServer *url.UR
 		if ipxeHTTPBinServer != nil {
 			paths := []string{i.IPXEBinary}
 			if i.Mac != nil {
-				paths = append([]string{i.Mac.String()}, paths...)
+				macFixed := strings.ReplaceAll(i.Mac.String(), ":", "-")
+				paths = append([]string{macFixed}, paths...)
 			}
 			bootfile = ipxeHTTPBinServer.JoinPath(paths...).String()
 		}
@@ -291,9 +303,15 @@ func (i Info) Bootfile(customUC UserClass, ipxeScript, ipxeHTTPBinServer *url.UR
 		}
 		bootfile = t.JoinPath(paths...).String()
 	default:
-		if i.IPXEBinary != "" {
-			bootfile = i.IPXEBinary
+		paths := []string{i.IPXEBinary}
+		if i.VendorClassFrom() == "PXEClient" && isRaspberryPI(i.Mac) {
+			paths = []string{"start4.elf"}
 		}
+		if i.Mac != nil {
+			macFixed := strings.ReplaceAll(i.Mac.String(), ":", "-")
+			paths = append([]string{macFixed}, paths...)
+		}
+		bootfile = strings.Join(paths, "/")
 	}
 
 	return bootfile

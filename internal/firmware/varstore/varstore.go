@@ -84,16 +84,6 @@ func runVirtFwVars(args ...string) (string, error) {
 	return string(output), nil
 }
 
-// Probe checks if a file is an EDK2 varstore
-func Probe(filename string) bool {
-	data, err := os.ReadFile(filename)
-	if err != nil {
-		return false
-	}
-	offset := FindNvData(data)
-	return offset != -1
-}
-
 // NewEfiVariableStore creates a new Edk2VarStore from a file
 func NewEfiVariableStore(filename string) (*EfiVariableStore, error) {
 	vs := &EfiVariableStore{
@@ -177,7 +167,7 @@ func (vs *EfiVariableStore) WriteVarStore(filename string, varlist EfiVarList) e
 		return err
 	}
 
-	err = os.WriteFile(fwFile, b, 0644)
+	err = os.WriteFile(fwFile, b, 0755)
 	if err != nil {
 		return err
 	}

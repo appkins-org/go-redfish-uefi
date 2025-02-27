@@ -188,23 +188,6 @@ func (h *Handler) Handle(ctx context.Context, conn *ipv4.PacketConn, dp data.Pac
 	// set bootfile header
 	reply.BootFileName = i.Bootfile("", h.Netboot.IPXEScriptURL(dp.Pkt), h.Netboot.IPXEBinServerHTTP, h.Netboot.IPXEBinServerTFTP)
 
-	if !h.AutoProxyEnabled {
-		// check the backend, if PXE is NOT allowed, set the boot file name to "/<mac address>/not-allowed"
-		_, n, err := h.Backend.GetByMac(ctx, dp.Pkt.ClientHWAddr)
-		if err != nil || (n != nil && !n.AllowNetboot) {
-			l := log.V(1)
-			if err != nil {
-				l = l.WithValues("error", err.Error())
-			}
-			if n != nil {
-				l = l.WithValues("netbootAllowed", n.AllowNetboot)
-			}
-			l.Info("Ignoring packet")
-			span.SetStatus(codes.Ok, "netboot not allowed")
-			return
-		}
-	}
-
 	log.Info(
 		"received DHCP packet",
 		"type", dp.Pkt.MessageType().String(),

@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/appkins-org/go-redfish-uefi/internal/rpi4"
+	"github.com/appkins-org/go-redfish-uefi/internal/firmware/uboot"
 	"github.com/go-logr/logr"
 
 	"github.com/pin/tftp/v3"
@@ -56,7 +56,7 @@ func (r *Server) ListenAndServe(ctx context.Context, addr netip.AddrPort) error 
 
 	go func() {
 		<-ctx.Done()
-		r.Logger.Info("shutting down http server")
+		r.Logger.Info("shutting down tftp server")
 		s.Shutdown()
 	}()
 	if err := Serve(ctx, conn, s); err != nil {
@@ -77,6 +77,7 @@ func Serve(_ context.Context, conn net.PacketConn, s *tftp.Server) error {
 
 // HandleRead handlers TFTP GET requests. The function signature satisfies the tftp.Server.readHandler parameter type.
 func (h *Handler) HandleRead(fullfilepath string, rf io.ReaderFrom) error {
+
 	content, ok := binary.Files[filepath.Base(fullfilepath)]
 	if ok {
 		return h.HandleIpxeRead(fullfilepath, rf, content)
@@ -93,12 +94,9 @@ func (h *Handler) HandleRead(fullfilepath string, rf io.ReaderFrom) error {
 
 	filename := parts[len(parts)-1]
 	filedir := strings.Join(parts[:len(parts)-1], "/")
-	firstDir := filedir
-	if len(parts) > 1 {
-		firstDir = parts[0]
-	}
+	prefix := parts[0]
 
-	if _, err := net.ParseMAC(firstDir); err == nil {
+	if _, err := net.ParseMAC(prefix); err == nil {
 		rootpath := filename
 		if len(parts) > 2 {
 			rootpath = strings.Join(parts[1:], "/")
@@ -140,7 +138,7 @@ func (h *Handler) HandleRead(fullfilepath string, rf io.ReaderFrom) error {
 					h.Log.Error(err, "copying file failed", "filename", rootpath)
 					return fmt.Errorf("copying %s to %s: %w", rootpath, filename, err)
 				}
-			} else if content, ok := rpi4.Files[rootpath]; ok {
+			} else if content, ok := uboot.Files[rootpath]; ok {
 				if err := h.createFile(root, fullfilepath, content); err != nil {
 					return err
 				}
@@ -165,7 +163,7 @@ func (h *Handler) HandleRead(fullfilepath string, rf io.ReaderFrom) error {
 		h.Log.Info("bytes sent", n)
 		return nil
 
-	} else if content, ok := rpi4.Files[fullfilepath]; ok {
+	} else if content, ok := uboot.Files[fullfilepath]; ok {
 		ct := bytes.NewReader(content)
 		b, err := rf.ReadFrom(ct)
 		if err != nil {
@@ -209,7 +207,7 @@ func (h *Handler) HandleRead(fullfilepath string, rf io.ReaderFrom) error {
 }
 
 func (h *Handler) createFile(root *Root, filename string, content []byte) error {
-	// If the file does not exist in the new path, but exists in the rpi4.Files map, use the map.
+	// If the file does not exist in the new path, but exists in the uboot.Files map, use the map.
 	newF, err := root.Create(filename)
 	if err != nil {
 		h.Log.Error(err, "creating file failed", "filename", filename)
@@ -252,7 +250,7 @@ func (h *Handler) HandleWrite(filename string, wt io.WriterTo) error {
 	}
 	defer root.Close()
 
-	file, err := root.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0644)
+	file, err := root.OpenFile(filename, os.O_RDWR|os.O_CREATE, 0755)
 	if err != nil {
 		h.Log.Error(err, "opening file failed", "filename", filename)
 		return nil
