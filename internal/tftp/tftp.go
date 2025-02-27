@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/appkins-org/go-redfish-uefi/internal/firmware/uboot"
@@ -96,7 +97,13 @@ func (h *Handler) HandleRead(fullfilepath string, rf io.ReaderFrom) error {
 	filedir := strings.Join(parts[:len(parts)-1], "/")
 	prefix := parts[0]
 
+	hasMac := false
 	if _, err := net.ParseMAC(prefix); err == nil {
+		hasMac = true
+	}
+	hasSerial := regexp.MustCompile(`^\d{2}[a-z]\d{5}$`).MatchString(prefix)
+
+	if hasMac {
 		rootpath := filename
 		if len(parts) > 2 {
 			rootpath = strings.Join(parts[1:], "/")
@@ -146,6 +153,13 @@ func (h *Handler) HandleRead(fullfilepath string, rf io.ReaderFrom) error {
 		}
 	}
 
+	var parsedfilepath string
+	if hasSerial {
+		parsedfilepath = strings.Join(parts[:], "/")
+	} else {
+		parsedfilepath = strings.Join(parts, "/")
+	}
+
 	if _, err := root.Stat(fullfilepath); err == nil {
 		// file exists
 		file, err := root.Open(fullfilepath)
@@ -163,11 +177,11 @@ func (h *Handler) HandleRead(fullfilepath string, rf io.ReaderFrom) error {
 		h.Log.Info("bytes sent", n)
 		return nil
 
-	} else if content, ok := uboot.Files[fullfilepath]; ok {
+	} else if content, ok := uboot.Files[parsedfilepath]; ok {
 		ct := bytes.NewReader(content)
 		b, err := rf.ReadFrom(ct)
 		if err != nil {
-			h.Log.Error(err, "file serve failed", "b", b, "contentSize", len(content))
+			h.Log.Error(err, "file serve failed", "fullfilepath", fullfilepath, "b", b, "contentSize", len(content))
 			return err
 		}
 		h.Log.Info("file served", "bytesSent", b, "contentSize", len(content))

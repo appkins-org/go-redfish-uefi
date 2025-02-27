@@ -30,7 +30,7 @@ RUN git clone --depth=1 -b master https://source.denx.de/u-boot/u-boot.git
 # Change into U-Boot directory
 WORKDIR /build/u-boot
 
-COPY hack/.config /build/u-boot/.config
+COPY .config /build/u-boot/.config
 
 # Build U-Boot
 RUN make distclean && \

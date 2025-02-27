@@ -307,9 +307,11 @@ func (i Info) Bootfile(customUC UserClass, ipxeScript, ipxeHTTPBinServer *url.UR
 		if i.VendorClassFrom() == "PXEClient" && isRaspberryPI(i.Mac) {
 			paths = []string{"start4.elf"}
 		}
-		if i.Mac != nil {
-			macFixed := strings.ReplaceAll(i.Mac.String(), ":", "-")
-			paths = append([]string{macFixed}, paths...)
+		if false {
+			if i.Mac != nil {
+				macFixed := strings.ReplaceAll(i.Mac.String(), ":", "-")
+				paths = append([]string{macFixed}, paths...)
+			}
 		}
 		bootfile = strings.Join(paths, "/")
 	}
