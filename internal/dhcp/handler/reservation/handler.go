@@ -18,7 +18,7 @@ import (
 	"golang.org/x/net/ipv4"
 )
 
-const tracerName = "github.com/tinkerbell/smee"
+const tracerName = "github.com/appkins-org/go-redfish-uefi"
 
 // setDefaults will update the Handler struct to have default values so as
 // to avoid panic for nil pointers and such.

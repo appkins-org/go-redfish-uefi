@@ -30,12 +30,13 @@ RUN git clone --depth=1 -b master https://source.denx.de/u-boot/u-boot.git
 # Change into U-Boot directory
 WORKDIR /build/u-boot
 
-COPY .config /build/u-boot/.config
-
 # Build U-Boot
 RUN make distclean && \
-    make ${TARGET_BOARD}_defconfig && \
-    make -j$(nproc) CROSS_COMPILE=${CROSS_COMPILE}
+    make ${TARGET_BOARD}_defconfig
+   
+COPY .config /build/u-boot/
+    
+RUN make -j$(nproc) CROSS_COMPILE=${CROSS_COMPILE}
 
 # Create output directory
 RUN mkdir -p /firmware

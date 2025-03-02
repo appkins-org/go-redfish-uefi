@@ -26,7 +26,8 @@ arm 64bit=1
 core_freq=250
 device tree=bcm2710-rpi-3-b-plus.dtb`
 
-const ubootConf = `arm_64bit=1
+const ubootConf = `boot_ramdisk=1
+arm_64bit=1
 arm_boost=1
 enable_uart=1
 kernel=u-boot.bin

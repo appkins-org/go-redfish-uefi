@@ -305,7 +305,7 @@ func (i Info) Bootfile(customUC UserClass, ipxeScript, ipxeHTTPBinServer *url.UR
 	default:
 		paths := []string{i.IPXEBinary}
 		if i.VendorClassFrom() == "PXEClient" && isRaspberryPI(i.Mac) {
-			paths = []string{"start4.elf"}
+			paths = []string{i.IPXEBinary}
 		}
 		if false {
 			if i.Mac != nil {
