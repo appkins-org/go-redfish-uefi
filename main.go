@@ -17,7 +17,7 @@ import (
 	"syscall"
 
 	"github.com/appkins-org/go-redfish-uefi/api/redfish"
-	"github.com/appkins-org/go-redfish-uefi/internal/backend/file"
+	"github.com/appkins-org/go-redfish-uefi/internal/backend/persist"
 	"github.com/appkins-org/go-redfish-uefi/internal/config"
 	itftp "github.com/appkins-org/go-redfish-uefi/internal/tftp"
 	"github.com/go-logr/logr"
@@ -43,7 +43,7 @@ func main() {
 
 	log := defaultLogger(cfg.LogLevel)
 
-	backend, err := defaultBackend(context.Background(), log, cfg.BackendFilePath)
+	backend, err := defaultBackend(context.Background(), log, cfg)
 	if err != nil {
 		log.Error(err, "failed to create backend")
 		panic(fmt.Errorf("failed to create backend: %w", err))
@@ -54,15 +54,7 @@ func main() {
 
 	g, ctx := errgroup.WithContext(ctx)
 
-	server := redfish.NewRedfishServer(redfish.RedfishServerConfig{
-		Insecure:      true,
-		UnifiUser:     cfg.Unifi.Username,
-		UnifiPass:     cfg.Unifi.Password,
-		UnifiEndpoint: cfg.Unifi.Endpoint,
-		UnifiSite:     cfg.Unifi.Site,
-		UnifiDevice:   cfg.Unifi.Device,
-		Logger:        log,
-	}, backend)
+	server := redfish.NewRedfishServer(cfg, log, backend)
 
 	handlers := map[string]func(http.ResponseWriter, *http.Request){}
 	handlers["/ipxe/"] = ihttp.Handler{
@@ -70,10 +62,8 @@ func main() {
 		Patch: []byte(cfg.Tftp.IpxePatch),
 	}.Handle
 
-	addr := fmt.Sprintf("%s:%d", cfg.Address, cfg.Port)
-
 	g.Go(func() error {
-		return server.ListenAndServe(ctx, addr, handlers)
+		return server.ListenAndServe(ctx, handlers)
 	})
 
 	ts := &itftp.Server{
@@ -127,8 +117,8 @@ func main() {
 
 }
 
-func defaultBackend(ctx context.Context, log logr.Logger, filePath string) (handler.BackendStore, error) {
-	f, err := file.NewWatcher(log, filePath)
+func defaultBackend(ctx context.Context, log logr.Logger, config *config.Config) (handler.BackendStore, error) {
+	f, err := persist.NewPersist(log, config)
 	if err != nil {
 		return nil, err
 	}

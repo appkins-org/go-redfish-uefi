@@ -5,7 +5,6 @@ import (
 	"net"
 	"strings"
 
-	"github.com/appkins-org/go-redfish-uefi/api/redfish"
 	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/viper"
 )
@@ -18,6 +17,7 @@ type UnifiConfig struct {
 	Endpoint string `yaml:"endpoint" mapstructure:"endpoint"`
 	Site     string `yaml:"site" mapstructure:"site"`
 	Device   string `yaml:"device" mapstructure:"device"`
+	Insecure bool   `yaml:"insecure" mapstructure:"insecure"`
 }
 
 type TftpConfig struct {
@@ -46,14 +46,13 @@ type DhcpConfig struct {
 }
 
 type Config struct {
-	Address         string                           `yaml:"address" mapstructure:"address"`
-	Port            int                              `yaml:"port" mapstructure:"port"`
-	Unifi           UnifiConfig                      `yaml:"unifi" mapstructure:"unifi"`
-	Tftp            TftpConfig                       `yaml:"tftp" mapstructure:"tftp"`
-	Dhcp            DhcpConfig                       `yaml:"dhcp" mapstructure:"dhcp"`
-	Systems         map[string]redfish.RedfishSystem `yaml:"systems" mapstructure:"systems"`
-	LogLevel        string                           `yaml:"log_level" mapstructure:"log_level"`
-	BackendFilePath string                           `yaml:"backend_file_path" mapstructure:"backend_file_path"`
+	Address         string      `yaml:"address" mapstructure:"address"`
+	Port            int         `yaml:"port" mapstructure:"port"`
+	Unifi           UnifiConfig `yaml:"unifi" mapstructure:"unifi"`
+	Tftp            TftpConfig  `yaml:"tftp" mapstructure:"tftp"`
+	Dhcp            DhcpConfig  `yaml:"dhcp" mapstructure:"dhcp"`
+	LogLevel        string      `yaml:"log_level" mapstructure:"log_level"`
+	BackendFilePath string      `yaml:"backend_file_path" mapstructure:"backend_file_path"`
 }
 
 func NewConfig() (conf *Config, err error) {
@@ -75,6 +74,7 @@ func NewConfig() (conf *Config, err error) {
 	viper.SetDefault("unifi.endpoint", "")
 	viper.SetDefault("unifi.site", "default")
 	viper.SetDefault("unifi.device", "")
+	viper.SetDefault("unifi.insecure", true)
 	viper.SetDefault("tftp.address", "0.0.0.0")
 	viper.SetDefault("tftp.port", 69)
 	viper.SetDefault("tftp.root_directory", "/tftpboot")

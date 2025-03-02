@@ -42,6 +42,14 @@ type netboot struct {
 	Facility      string `yaml:"facility"`
 }
 
+type power struct {
+	// State is the current power state of the system.
+	State    string `json:"state"`
+	Port     int    `json:"port"`
+	DeviceId string `json:"device_id"`
+	Mode     string `json:"mode"`
+}
+
 // dhcp is the structure for the data expected in a file.
 type dhcp struct {
 	MACAddress       net.HardwareAddr // The MAC address of the client.
@@ -59,6 +67,7 @@ type dhcp struct {
 	DomainSearch     []string         `yaml:"domainSearch"`     // DHCP option 119.
 	Disabled         bool             // If true, no DHCP response should be sent.
 	Netboot          netboot          `yaml:"netboot"`
+	Power            power            `yaml:"power"`
 }
 
 // Watcher represents the backend for watching a file for changes and updating the in memory DHCP data.
@@ -103,7 +112,7 @@ func NewWatcher(l logr.Logger, f string) (*Watcher, error) {
 
 // GetByMac is the implementation of the Backend interface.
 // It reads a given file from the in memory data (w.data).
-func (w *Watcher) GetByMac(ctx context.Context, mac net.HardwareAddr) (*data.DHCP, *data.Netboot, error) {
+func (w *Watcher) GetByMac(ctx context.Context, mac net.HardwareAddr) (*data.DHCP, *data.Netboot, *data.Power, error) {
 	tracer := otel.Tracer(tracerName)
 	_, span := tracer.Start(ctx, "backend.file.GetByMac")
 	defer span.End()
@@ -118,35 +127,35 @@ func (w *Watcher) GetByMac(ctx context.Context, mac net.HardwareAddr) (*data.DHC
 		w.Log.Error(err, "failed to unmarshal file data")
 		span.SetStatus(codes.Error, err.Error())
 
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	for k, v := range r {
 		if strings.EqualFold(k, mac.String()) {
 			// found a record for this mac address
 			v.MACAddress = mac
-			d, n, err := w.translate(v)
+			d, n, p, err := w.translate(v)
 			if err != nil {
 				span.SetStatus(codes.Error, err.Error())
 
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			span.SetAttributes(d.EncodeToAttributes()...)
 			span.SetAttributes(n.EncodeToAttributes()...)
 			span.SetStatus(codes.Ok, "")
 
-			return d, n, nil
+			return d, n, p, nil
 		}
 	}
 
 	err := fmt.Errorf("%w: %s", errRecordNotFound, mac.String())
 	span.SetStatus(codes.Error, err.Error())
 
-	return nil, nil, err
+	return nil, nil, nil, err
 }
 
 // GetByIP is the implementation of the Backend interface.
 // It reads a given file from the in memory data (w.data).
-func (w *Watcher) GetByIP(ctx context.Context, ip net.IP) (*data.DHCP, *data.Netboot, error) {
+func (w *Watcher) GetByIP(ctx context.Context, ip net.IP) (*data.DHCP, *data.Netboot, *data.Power, error) {
 	tracer := otel.Tracer(tracerName)
 	_, span := tracer.Start(ctx, "backend.file.GetByIP")
 	defer span.End()
@@ -161,7 +170,7 @@ func (w *Watcher) GetByIP(ctx context.Context, ip net.IP) (*data.DHCP, *data.Net
 		w.Log.Error(err, "failed to unmarshal file data")
 		span.SetStatus(codes.Error, err.Error())
 
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	for k, v := range r {
 		if v.IPAddress == ip.String() {
@@ -173,30 +182,30 @@ func (w *Watcher) GetByIP(ctx context.Context, ip net.IP) (*data.DHCP, *data.Net
 				w.Log.Error(err, "failed to parse mac address")
 				span.SetStatus(codes.Error, err.Error())
 
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			v.MACAddress = mac
-			d, n, err := w.translate(v)
+			d, n, p, err := w.translate(v)
 			if err != nil {
 				span.SetStatus(codes.Error, err.Error())
 
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			span.SetAttributes(d.EncodeToAttributes()...)
 			span.SetAttributes(n.EncodeToAttributes()...)
 			span.SetStatus(codes.Ok, "")
 
-			return d, n, nil
+			return d, n, p, nil
 		}
 	}
 
 	err := fmt.Errorf("%w: %s", errRecordNotFound, ip.String())
 	span.SetStatus(codes.Error, err.Error())
 
-	return nil, nil, err
+	return nil, nil, nil, err
 }
 
-func (w *Watcher) Put(ctx context.Context, mac net.HardwareAddr, d *data.DHCP, n *data.Netboot) error {
+func (w *Watcher) Put(ctx context.Context, mac net.HardwareAddr, d *data.DHCP, n *data.Netboot, p *data.Power) error {
 	tracer := otel.Tracer(tracerName)
 	_, span := tracer.Start(ctx, "backend.file.Put")
 	defer span.End()
@@ -231,52 +240,54 @@ func (w *Watcher) Put(ctx context.Context, mac net.HardwareAddr, d *data.DHCP, n
 	if v, ok := r[mac.String()]; ok {
 		// found a record for this mac address
 		v.MACAddress = mac
-		d, n, err := w.translate(v)
+		d, n, p, err := w.translate(v)
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
 		}
-		if d.IPAddress.String() != "" && d.IPAddress.String() != v.IPAddress {
-			v.IPAddress = d.IPAddress.String()
-		}
-		if d.SubnetMask.String() != "" && d.SubnetMask.String() != v.SubnetMask {
-			v.SubnetMask = d.SubnetMask.String()
-		}
-		if d.DefaultGateway.String() != "" && d.DefaultGateway.String() != v.DefaultGateway {
-			v.DefaultGateway = d.DefaultGateway.String()
-		}
-		if len(d.NameServers) != 0 && len(d.NameServers) != len(v.NameServers) {
-			nameServers := make([]string, 0, len(d.NameServers))
-			for _, ns := range d.NameServers {
-				nameServers = append(nameServers, ns.String())
+		if d != nil {
+			if d.IPAddress.String() != "" && d.IPAddress.String() != v.IPAddress {
+				v.IPAddress = d.IPAddress.String()
 			}
-			v.NameServers = nameServers
-		}
-		if d.Hostname != "" && d.Hostname != v.Hostname {
-			v.Hostname = d.Hostname
-		}
-		if d.DomainName != "" && d.DomainName != v.DomainName {
-			v.DomainName = d.DomainName
-		}
-		if d.BroadcastAddress.String() != "" && d.BroadcastAddress.String() != v.BroadcastAddress {
-			v.BroadcastAddress = d.BroadcastAddress.String()
-		}
-		if len(ntpServers) != 0 && len(ntpServers) != len(v.NTPServers) {
-			v.NTPServers = ntpServers
-		}
-		if d.VLANID != "" && d.VLANID != v.VLANID {
-			v.VLANID = d.VLANID
-		}
-		if d.LeaseTime != 0 && d.LeaseTime != uint32(v.LeaseTime) {
-			v.LeaseTime = int(d.LeaseTime)
-		}
-		if d.Arch != "" && d.Arch != v.Arch {
-			v.Arch = d.Arch
-		}
-		if len(d.DomainSearch) != 0 && len(d.DomainSearch) != len(v.DomainSearch) {
-			v.DomainSearch = d.DomainSearch
-		}
-		if d.Disabled != v.Disabled {
-			v.Disabled = d.Disabled
+			if d.SubnetMask.String() != "" && d.SubnetMask.String() != v.SubnetMask {
+				v.SubnetMask = d.SubnetMask.String()
+			}
+			if d.DefaultGateway.String() != "" && d.DefaultGateway.String() != v.DefaultGateway {
+				v.DefaultGateway = d.DefaultGateway.String()
+			}
+			if len(d.NameServers) != 0 && len(d.NameServers) != len(v.NameServers) {
+				nameServers := make([]string, 0, len(d.NameServers))
+				for _, ns := range d.NameServers {
+					nameServers = append(nameServers, ns.String())
+				}
+				v.NameServers = nameServers
+			}
+			if d.Hostname != "" && d.Hostname != v.Hostname {
+				v.Hostname = d.Hostname
+			}
+			if d.DomainName != "" && d.DomainName != v.DomainName {
+				v.DomainName = d.DomainName
+			}
+			if d.BroadcastAddress.String() != "" && d.BroadcastAddress.String() != v.BroadcastAddress {
+				v.BroadcastAddress = d.BroadcastAddress.String()
+			}
+			if len(ntpServers) != 0 && len(ntpServers) != len(v.NTPServers) {
+				v.NTPServers = ntpServers
+			}
+			if d.VLANID != "" && d.VLANID != v.VLANID {
+				v.VLANID = d.VLANID
+			}
+			if d.LeaseTime != 0 && d.LeaseTime != uint32(v.LeaseTime) {
+				v.LeaseTime = int(d.LeaseTime)
+			}
+			if d.Arch != "" && d.Arch != v.Arch {
+				v.Arch = d.Arch
+			}
+			if len(d.DomainSearch) != 0 && len(d.DomainSearch) != len(v.DomainSearch) {
+				v.DomainSearch = d.DomainSearch
+			}
+			if d.Disabled != v.Disabled {
+				v.Disabled = d.Disabled
+			}
 		}
 
 		if n != nil {
@@ -297,6 +308,22 @@ func (w *Watcher) Put(ctx context.Context, mac net.HardwareAddr, d *data.DHCP, n
 				v.Netboot.Facility = n.Facility
 			}
 		}
+
+		if p != nil {
+			if p.State != "" && p.State != v.Power.State {
+				v.Power.State = p.State
+			}
+			if p.Port != 0 && p.Port != v.Power.Port {
+				v.Power.Port = p.Port
+			}
+			if p.DeviceId != "" && p.DeviceId != v.Power.DeviceId {
+				v.Power.DeviceId = p.DeviceId
+			}
+			if p.Mode != "" && p.Mode != v.Power.Mode {
+				v.Power.Mode = p.Mode
+			}
+		}
+
 		r[mac.String()] = v
 	} else {
 		dhcpValue := dhcp{
@@ -350,6 +377,14 @@ func (w *Watcher) Put(ctx context.Context, mac net.HardwareAddr, d *data.DHCP, n
 	return nil
 }
 
+func (w *Watcher) PowerCycle(ctx context.Context, mac net.HardwareAddr) error {
+	tracer := otel.Tracer(tracerName)
+	_, span := tracer.Start(ctx, "backend.file.PowerCycle")
+	defer span.End()
+
+	return nil
+}
+
 // Start starts watching a file for changes and updates the in memory data (w.data) on changes.
 // Start is a blocking method. Use a context cancellation to exit.
 func (w *Watcher) Start(ctx context.Context) {
@@ -384,23 +419,55 @@ func (w *Watcher) Start(ctx context.Context) {
 	}
 }
 
+func (w *Watcher) GetKeys(ctx context.Context) ([]net.HardwareAddr, error) {
+	tracer := otel.Tracer(tracerName)
+	_, span := tracer.Start(ctx, "backend.file.GetKeys")
+	defer span.End()
+
+	w.dataMu.RLock()
+	d := w.data
+	w.dataMu.RUnlock()
+	r := make(map[string]dhcp)
+	if err := yaml.Unmarshal(d, &r); err != nil {
+		err := fmt.Errorf("%w: %w", err, errFileFormat)
+		w.Log.Error(err, "failed to unmarshal file data")
+		span.SetStatus(codes.Error, err.Error())
+	}
+
+	keys := make([]net.HardwareAddr, 0, len(r))
+	for k := range r {
+		mac, err := net.ParseMAC(k)
+		if err != nil {
+			err := fmt.Errorf("%w: %w", err, errFileFormat)
+			w.Log.Error(err, "failed to parse mac address")
+			span.SetStatus(codes.Error, err.Error())
+		}
+		keys = append(keys, mac)
+	}
+
+	span.SetStatus(codes.Ok, "")
+
+	return keys, nil
+}
+
 // translate converts the data from the file into a data.DHCP and data.Netboot structs.
-func (w *Watcher) translate(r dhcp) (*data.DHCP, *data.Netboot, error) {
+func (w *Watcher) translate(r dhcp) (*data.DHCP, *data.Netboot, *data.Power, error) {
 	d := new(data.DHCP)
 	n := new(data.Netboot)
+	p := new(data.Power)
 
 	d.MACAddress = r.MACAddress
 	// ip address, required
 	ip, err := netip.ParseAddr(r.IPAddress)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: %w", err, errParseIP)
+		return nil, nil, nil, fmt.Errorf("%w: %w", err, errParseIP)
 	}
 	d.IPAddress = ip
 
 	// subnet mask, required
 	sm := net.ParseIP(r.SubnetMask)
 	if sm == nil {
-		return nil, nil, errParseSubnet
+		return nil, nil, nil, errParseSubnet
 	}
 	d.SubnetMask = net.IPMask(sm.To4())
 
@@ -470,7 +537,7 @@ func (w *Watcher) translate(r dhcp) (*data.DHCP, *data.Netboot, error) {
 	if r.Netboot.IPXEScriptURL != "" {
 		u, err := url.Parse(r.Netboot.IPXEScriptURL)
 		if err != nil {
-			return nil, nil, fmt.Errorf("%w: %w", err, errParseURL)
+			return nil, nil, nil, fmt.Errorf("%w: %w", err, errParseURL)
 		}
 		n.IPXEScriptURL = u
 	}
@@ -490,5 +557,21 @@ func (w *Watcher) translate(r dhcp) (*data.DHCP, *data.Netboot, error) {
 		n.Facility = r.Netboot.Facility
 	}
 
-	return d, n, nil
+	if p.State != "" {
+		p.State = r.Power.State
+	}
+
+	if p.Port != 0 {
+		p.Port = r.Power.Port
+	}
+
+	if p.DeviceId != "" {
+		p.DeviceId = r.Power.DeviceId
+	}
+
+	return d, n, p, nil
+}
+
+func (w *Watcher) Sync(ctx context.Context) error {
+	return nil
 }

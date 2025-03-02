@@ -105,7 +105,7 @@ func (h *Handler) HandleRead(fullfilepath string, rf io.ReaderFrom) error {
 	remoteAddr := outgoingTransfer.RemoteAddr()
 	h.Log.Info("handle read - client output", "remoteAddr", remoteAddr, "event", "put", "filename", fullfilepath)
 
-	dhcpInfo, netboot, err := h.backend.GetByIP(h.ctx, remoteAddr.IP)
+	dhcpInfo, netboot, _, err := h.backend.GetByIP(h.ctx, remoteAddr.IP)
 	if err != nil {
 		h.Log.Error(err, "failed to get dhcp info", "remoteAddr", remoteAddr)
 	}

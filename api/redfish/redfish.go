@@ -3,27 +3,33 @@ package redfish
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 )
 
-func (server *RedfishServer) ListenAndServe(ctx context.Context, addr string, handlers map[string]func(http.ResponseWriter, *http.Request)) error {
-	r := http.NewServeMux()
+func (server *RedfishServer) ListenAndServe(ctx context.Context, handlers map[string]func(http.ResponseWriter, *http.Request)) error {
+
+	m := http.NewServeMux()
 
 	options := StdHTTPServerOptions{
-		BaseURL:    addr,
-		BaseRouter: r,
+		BaseURL:    server.Config.Address,
+		BaseRouter: m,
+	}
+
+	if options.ErrorHandlerFunc == nil {
+		options.ErrorHandlerFunc = func(w http.ResponseWriter, r *http.Request, err error) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		}
 	}
 
 	for path, handler := range handlers {
-		r.HandleFunc(path, handler)
+		m.HandleFunc(path, handler)
 	}
 
-	h := HandlerWithOptions(server, options)
-
 	s := &http.Server{
-		Handler: h,
+		Handler: HandlerWithOptions(server, options),
 
-		Addr: addr,
+		Addr: fmt.Sprintf("%s:%d", server.Config.Address, server.Config.Port),
 	}
 
 	go func() {

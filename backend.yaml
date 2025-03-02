@@ -17,5 +17,10 @@ e0:92:8f:45:b4:40:
     Facility: ""
     IPXEScript: ""
     IPXEScriptURL: ""
+  Power:
+    device_id: ""
+    mode: ""
+    port: 0
+    state: ""
   SubnetMask: <nil>
   VLANID: ""

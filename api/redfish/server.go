@@ -2,24 +2,17 @@ package redfish
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
-	"net/http/cookiejar"
-	"net/netip"
-	"os"
-	"slices"
-	"strconv"
-	"strings"
-	"time"
 
+	"github.com/appkins-org/go-redfish-uefi/internal/config"
 	"github.com/appkins-org/go-redfish-uefi/internal/dhcp/data"
 	"github.com/appkins-org/go-redfish-uefi/internal/dhcp/handler"
 	"github.com/appkins-org/go-redfish-uefi/internal/firmware/varstore"
 	"github.com/go-logr/logr"
-	"github.com/ubiquiti-community/go-unifi/unifi"
 )
 
 func ptr[T any](v T) *T {
@@ -88,61 +81,21 @@ func redfishError(err error) *RedfishError {
 }
 
 type RedfishServer struct {
-	Systems map[int]RedfishSystem
-
-	Config *RedfishServerConfig
-
-	client *unifi.Client
+	Config *config.Config
 
 	Logger logr.Logger
 
 	backend handler.BackendStore
 }
 
-func NewRedfishServer(cfg RedfishServerConfig, backend handler.BackendStore) *RedfishServer {
-	client := unifi.Client{}
-
-	if err := client.SetBaseURL(cfg.UnifiEndpoint); err != nil {
-		panic(fmt.Sprintf("failed to set base url: %s", err))
-	}
-
-	httpClient := &http.Client{}
-	httpClient.Transport = &http.Transport{
-		DialContext: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-			DualStack: true,
-		}).DialContext,
-		MaxIdleConns:          100,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: cfg.Insecure,
-		},
-	}
-
-	jar, _ := cookiejar.New(nil)
-	httpClient.Jar = jar
-
-	if err := client.SetHTTPClient(httpClient); err != nil {
-		panic(fmt.Sprintf("failed to set http client: %s", err))
-	}
-
-	if err := client.Login(context.Background(), cfg.UnifiUser, cfg.UnifiPass); err != nil {
-		panic(fmt.Sprintf("failed to login: %s", err))
-	}
-
-	rfSystems := make(map[int]RedfishSystem)
-
+func NewRedfishServer(cfg *config.Config, logger logr.Logger, backend handler.BackendStore) *RedfishServer {
 	server := &RedfishServer{
-		Systems: rfSystems,
-		client:  &client,
-		Config:  &cfg,
-		Logger:  cfg.Logger,
+		Config:  cfg,
+		Logger:  logger,
 		backend: backend,
 	}
+
+	server.Logger.Info("starting redfish server", "address", cfg.Address, "port", cfg.Port)
 
 	server.refreshSystems(context.Background())
 
@@ -150,122 +103,10 @@ func NewRedfishServer(cfg RedfishServerConfig, backend handler.BackendStore) *Re
 }
 
 func (s *RedfishServer) refreshSystems(ctx context.Context) (err error) {
-	device, err := s.client.GetDeviceByMAC(ctx, s.Config.UnifiSite, s.Config.UnifiDevice)
-	if err != nil {
-		panic(err)
-	}
 
-	if device.PortOverrides == nil {
-		panic("no port overrides found")
-	}
+	s.Logger.Info("refreshing systems", "backend", s.backend)
 
-	for _, port := range device.PortOverrides {
-
-		sys, ok := s.Systems[port.PortIDX]
-		if !ok {
-			sys = RedfishSystem{
-				UnifiPort: port.PortIDX,
-				DeviceMac: device.MAC,
-				SiteID:    device.SiteID,
-			}
-		}
-		sys.PoeMode = port.PoeMode
-
-		s.Systems[port.PortIDX] = sys
-	}
-
-	if clients, err := s.client.ListActiveClients(ctx, s.Config.UnifiSite); err != nil {
-		panic(err)
-	} else {
-		for _, c := range clients {
-
-			if c.UplinkMac == s.Config.UnifiDevice {
-
-				sys, ok := s.Systems[c.SwPort]
-				if !ok {
-					sys = RedfishSystem{
-						UnifiPort: c.SwPort,
-						DeviceMac: c.UplinkMac,
-						SiteID:    c.SiteID,
-					}
-				}
-
-				sys.MacAddress = c.Mac
-				sys.IpAddress = c.IP
-
-				firmware := strings.Join([]string{s.Config.TftpRoot, sys.MacAddress, "RPI_EFI.fd"}, string(os.PathSeparator))
-
-				sys.EfiVariableStore, err = varstore.NewEfiVariableStore(firmware)
-				if err != nil {
-					s.Logger.Error(err, "failed to create EFI variable store", "firmware", firmware)
-				}
-
-				s.Systems[c.SwPort] = sys
-			}
-		}
-	}
-
-	for _, sys := range s.Systems {
-
-		if sys.MacAddress == "" {
-			continue
-		}
-
-		dhcp := data.DHCP{}
-
-		if mac, err := net.ParseMAC(sys.MacAddress); err == nil {
-			dhcp.MACAddress = mac
-
-			if ip, err := netip.ParseAddr(sys.IpAddress); err == nil {
-				dhcp.IPAddress = ip
-			}
-
-			s.backend.Put(ctx, mac, &dhcp, nil)
-
-		} else {
-			s.Logger.Error(err, "failed to parse MAC address", "mac", sys.MacAddress)
-
-			continue
-		}
-	}
-
-	return
-}
-
-func (s *RedfishServer) updateDevicePort(ctx context.Context, portIdx int, poeMode string) (device *unifi.Device, err error) {
-	device, err = s.client.GetDeviceByMAC(ctx, s.Config.UnifiSite, s.Config.UnifiDevice)
-	if err != nil {
-		return
-	}
-	for i, p := range device.PortOverrides {
-		if p.PortIDX == portIdx {
-			device.PortOverrides[i].PoeMode = poeMode
-			device.PortOverrides[i].StpPortMode = false
-		}
-	}
-	device, err = s.client.UpdateDevice(ctx, s.Config.UnifiSite, device)
-	return
-}
-
-func (s *RedfishServer) getPortState(ctx context.Context, macAddress string, p int) (deviceId string, port unifi.DevicePortOverrides, err error) {
-	dev, err := s.client.GetDeviceByMAC(ctx, "default", macAddress)
-	if err != nil {
-		err = fmt.Errorf("error getting device by MAC Address %s: %v", macAddress, err)
-		return
-	}
-
-	deviceId = dev.ID
-
-	iPort := slices.IndexFunc(dev.PortOverrides, func(pd unifi.DevicePortOverrides) bool {
-		return pd.PortIDX == p
-	})
-
-	if iPort == -1 {
-		err = fmt.Errorf("port %d not found on device %s", p, deviceId)
-		return
-	}
-
-	port = dev.PortOverrides[iPort]
+	s.backend.Sync(ctx)
 
 	return
 }
@@ -345,24 +186,30 @@ func (s *RedfishServer) GetSoftwareInventory(w http.ResponseWriter, r *http.Requ
 // GetSystem implements ServerInterface.
 func (s *RedfishServer) GetSystem(w http.ResponseWriter, r *http.Request, systemId string) {
 
-	err := s.refreshSystems(r.Context())
+	ctx := r.Context()
+
+	err := s.refreshSystems(ctx)
 	if err != nil {
 		w.WriteHeader(500)
 		return
 	}
 
-	systemIdInt, err := strconv.ParseInt(systemId, 10, 64)
+	systemIdAddr, err := net.ParseMAC(systemId)
 	if err != nil {
 		w.WriteHeader(400)
 		w.Write([]byte(fmt.Sprintf("error parsing system id: %s", err)))
 		return
 	}
 
-	sy := s.Systems[int(systemIdInt)]
+	_, _, pwr, err := s.backend.GetByMac(ctx, systemIdAddr)
+	if err != nil {
+		w.WriteHeader(500)
+		return
+	}
 
 	resp := ComputerSystem{
 		Id:         &systemId,
-		PowerState: sy.GetPowerState(),
+		PowerState: (*PowerState)(&pwr.State),
 		Links: &SystemLinks{
 			Chassis:   &[]IdRef{{OdataId: ptr("/redfish/v1/Chassis/1")}},
 			ManagedBy: &[]IdRef{{OdataId: ptr("/redfish/v1/Managers/1")}},
@@ -393,7 +240,7 @@ func (s *RedfishServer) GetSystem(w http.ResponseWriter, r *http.Request, system
 		Status: &Status{
 			State: ptr(StateEnabled),
 		},
-		UUID: ptr(sy.MacAddress),
+		UUID: ptr(systemIdAddr.String()),
 	}
 
 	b, err := json.Marshal(resp)
@@ -442,14 +289,21 @@ func (s *RedfishServer) ListSystems(w http.ResponseWriter, r *http.Request) {
 
 	ids := make([]IdRef, 0)
 
-	for i := range s.Systems {
-		odataId := fmt.Sprintf("/redfish/v1/Systems/%d", i)
+	keys, err := s.backend.GetKeys(r.Context())
+	if err != nil {
+		w.WriteHeader(500)
+		w.Write([]byte(fmt.Sprintf("error getting keys: %s", err)))
+		return
+	}
+
+	for _, m := range keys {
+		odataId := fmt.Sprintf("/redfish/v1/Systems/%s", m)
 		ids = append(ids, IdRef{
 			OdataId: &odataId,
 		})
 	}
 
-	systems := Collection{
+	response := Collection{
 		Members:           &ids,
 		OdataContext:      ptr("/redfish/v1/$metadata#ComputerSystemCollection.ComputerSystemCollection"),
 		OdataType:         "#ComputerSystemCollection.ComputerSystemCollection",
@@ -459,8 +313,7 @@ func (s *RedfishServer) ListSystems(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(200)
-	err := json.NewEncoder(w).Encode(systems)
-	if err != nil {
+	if err := json.NewEncoder(w).Encode(response); err != nil {
 		w.WriteHeader(500)
 		w.Write([]byte(fmt.Sprintf("error encoding response: %s", err)))
 	}
@@ -474,75 +327,76 @@ func (s *RedfishServer) ResetIdrac(w http.ResponseWriter, r *http.Request) {
 // ResetSystem implements ServerInterface.
 func (s *RedfishServer) ResetSystem(w http.ResponseWriter, r *http.Request, systemId string) {
 
+	ctx := r.Context()
+
 	req := ResetSystemJSONRequestBody{}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(500)
+		s.Logger.Error(err, "error decoding request")
 		return
 	}
 
-	systemIdInt, err := strconv.ParseInt(systemId, 10, 64)
+	systemIdAddr, err := net.ParseMAC(systemId)
 	if err != nil {
 		w.WriteHeader(500)
+		s.Logger.Error(err, "error parsing system id")
 		return
 	}
 
-	err = s.refreshSystems(r.Context())
+	_, _, pwr, err := s.backend.GetByMac(ctx, systemIdAddr)
 	if err != nil {
 		w.WriteHeader(500)
+		s.Logger.Error(err, "error getting system by mac")
 		return
 	}
 
-	sys, ok := s.Systems[int(systemIdInt)]
-	if !ok {
+	if pwr == nil {
 		w.WriteHeader(404)
-		w.Write([]byte("system not found"))
+		s.Logger.Error(errors.New("power not found"), "system not found", "system", systemId)
 		return
 	}
 
-	if sys.PoeMode == "off" {
-		_, err := s.updateDevicePort(r.Context(), sys.UnifiPort, "auto")
+	if *req.ResetType == ResetTypeOn && pwr.State == string(On) {
+		w.WriteHeader(204)
+		s.Logger.Info("system already on", "system", systemId)
+		return
+	}
+
+	if pwr.State == "off" {
+
+		err := s.backend.Put(ctx, systemIdAddr, nil, nil, &data.Power{
+			State: "off",
+		})
 		if err != nil {
+			s.Logger.Error(err, "error setting power state", "system", systemId)
 			w.WriteHeader(500)
 			return
 		}
-		sys.PoeMode = "auto"
 	} else if *req.ResetType == ResetTypePowerCycle {
-		_, err := s.client.ExecuteCmd(r.Context(), s.Config.UnifiSite, "devmgr", unifi.Cmd{
-			Command: "power-cycle",
-			MAC:     sys.DeviceMac,
-			PortIDX: ptr(sys.UnifiPort),
-		})
+		err := s.backend.PowerCycle(ctx, systemIdAddr)
 		if err != nil {
 			w.WriteHeader(500)
+			s.Logger.Error(err, "error power cycling system", "system", systemId)
 			return
 		}
 		w.WriteHeader(204)
 		return
 	} else {
+		state := "auto"
 		switch *req.ResetType {
 		case ResetTypeOn:
-			_, err := s.updateDevicePort(r.Context(), sys.UnifiPort, "auto")
-			if err != nil {
-				w.WriteHeader(500)
-				return
-			}
-			w.WriteHeader(204)
-			return
+			state = "auto"
 		case ResetTypeForceOn:
-			_, err := s.updateDevicePort(r.Context(), sys.UnifiPort, "auto")
-			if err != nil {
-				w.WriteHeader(500)
-				return
-			}
-			w.WriteHeader(204)
-			return
+			state = "auto"
 		case ResetTypeForceOff:
-			_, err := s.updateDevicePort(r.Context(), sys.UnifiPort, "off")
-			if err != nil {
-				w.WriteHeader(500)
-				return
-			}
-			w.WriteHeader(204)
+			state = "off"
+		}
+		err := s.backend.Put(ctx, systemIdAddr, nil, nil, &data.Power{
+			State: state,
+		})
+		if err != nil {
+			w.WriteHeader(500)
+			s.Logger.Error(err, "error setting power state", "system", systemId)
 			return
 		}
 	}
@@ -551,47 +405,45 @@ func (s *RedfishServer) ResetSystem(w http.ResponseWriter, r *http.Request, syst
 // SetSystem implements ServerInterface.
 func (s *RedfishServer) SetSystem(w http.ResponseWriter, r *http.Request, systemId string) {
 
+	ctx := r.Context()
+
 	req := SetSystemJSONRequestBody{}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(500)
+		s.Logger.Error(err, "error decoding request")
 		return
 	}
 
-	systemIdInt, err := strconv.ParseInt(systemId, 10, 64)
+	systemIdAddr, err := net.ParseMAC(systemId)
 	if err != nil {
 		w.WriteHeader(500)
+		s.Logger.Error(err, "error parsing system id")
 		return
 	}
 
-	err = s.refreshSystems(r.Context())
+	_, _, pwr, err := s.backend.GetByMac(ctx, systemIdAddr)
 	if err != nil {
 		w.WriteHeader(500)
-		return
-	}
-
-	sys, ok := s.Systems[int(systemIdInt)]
-	if !ok {
-		w.WriteHeader(404)
-		w.Write([]byte("system not found"))
+		s.Logger.Error(err, "error getting system by mac")
 		return
 	}
 
 	poeMode := req.PowerState.GetPoeMode()
 
-	if poeMode != "" && poeMode != sys.PoeMode {
+	if poeMode != "" && pwr.Mode != poeMode {
 
-		sys.PoeMode = poeMode
+		pwr.Mode = poeMode
 
-		_, err := s.updateDevicePort(r.Context(), sys.UnifiPort, sys.PoeMode)
+		err := s.backend.Put(ctx, systemIdAddr, nil, nil, pwr)
 		if err != nil {
 			w.WriteHeader(500)
+			s.Logger.Error(err, "error setting power state", "system", systemId)
 			return
 		}
 	}
 
-	s.Systems[int(systemIdInt)] = sys
-
 	w.WriteHeader(204)
+	s.Logger.Info("system updated", "system", systemId)
 }
 
 // UpdateService implements ServerInterface.

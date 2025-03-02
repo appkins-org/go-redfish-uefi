@@ -68,6 +68,19 @@ type OSIE struct {
 	Initrd string
 }
 
+type Power struct {
+	// State is the power state of the machine.
+	State string
+	// DeviceId is the device ID of the machine.
+	DeviceId string
+	// SiteId is the site ID of the machine.
+	SiteId string
+	// Port is the port of the machine.
+	Port int
+	// Mode
+	Mode string
+}
+
 // EncodeToAttributes returns a slice of opentelemetry attributes that can be used to set span.SetAttributes.
 func (d *DHCP) EncodeToAttributes() []attribute.KeyValue {
 	var ns []string
@@ -118,11 +131,50 @@ func (d *DHCP) EncodeToAttributes() []attribute.KeyValue {
 // EncodeToAttributes returns a slice of opentelemetry attributes that can be used to set span.SetAttributes.
 func (n *Netboot) EncodeToAttributes() []attribute.KeyValue {
 	var s string
+
+	if n == nil {
+		return []attribute.KeyValue{}
+	}
+
 	if n.IPXEScriptURL != nil {
 		s = n.IPXEScriptURL.String()
 	}
 	return []attribute.KeyValue{
 		attribute.Bool("Netboot.AllowNetboot", n.AllowNetboot),
 		attribute.String("Netboot.IPXEScriptURL", s),
+	}
+}
+
+// EncodeToAttributes returns a slice of opentelemetry attributes that can be used to set span.SetAttributes.
+func (o *OSIE) EncodeToAttributes() []attribute.KeyValue {
+	var s string
+
+	if o == nil {
+		return []attribute.KeyValue{}
+	}
+
+	if o.BaseURL != nil {
+		s = o.BaseURL.String()
+	}
+	return []attribute.KeyValue{
+		attribute.String("OSIE.BaseURL", s),
+		attribute.String("OSIE.Kernel", o.Kernel),
+		attribute.String("OSIE.Initrd", o.Initrd),
+	}
+}
+
+// EncodeToAttributes returns a slice of opentelemetry attributes that can be used to set span.SetAttributes.
+func (p *Power) EncodeToAttributes() []attribute.KeyValue {
+
+	if p == nil {
+		return []attribute.KeyValue{}
+	}
+
+	return []attribute.KeyValue{
+		attribute.String("Power.State", p.State),
+		attribute.String("Power.DeviceID", p.DeviceId),
+		attribute.String("Power.SiteID", p.SiteId),
+		attribute.Int("Power.Port", p.Port),
+		attribute.String("Power.Mode", p.Mode),
 	}
 }
