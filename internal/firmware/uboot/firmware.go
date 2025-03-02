@@ -9,8 +9,7 @@ arm_boost=1
 enable_uart=1
 uart_2ndstage=1
 enable_gic=1
-kernel=u-boot.bin
-# armstub=armstub8.bin
+armstub=RPI_EFI.fd
 disable_commandline_tags=1
 disable_overscan=1
 device_tree_address=0x1f0000
@@ -75,6 +74,11 @@ var OverlaysMiniUartBtDtbo []byte
 //go:embed overlays/upstream-pi4.dtbo
 var OverlaysUpstreamPi4Dtbo []byte
 
+// OverlaysRpiPoePlusDtbo returns the overlays/rpi-poe-plus.dtbo file.
+//
+//go:embed overlays/rpi-poe-plus.dtbo
+var OverlaysRpiPoePlusDtbo []byte
+
 // FirmwareBrcmBrcmfmac43455SdioBin returns the firmware/brcm/brcmfmac43455-sdio.bin file.
 //
 //go:embed firmware/brcm/brcmfmac43455-sdio.bin
@@ -106,7 +110,7 @@ var UbootBin []byte
 var Initramfs []byte
 
 // ConfigTxt is the default configuration for the Raspberry Pi 4.
-var ConfigTxt []byte = []byte(ubootConf)
+var ConfigTxt []byte = []byte(edk2Conf)
 
 // DtDtb is the default device tree for the Raspberry Pi 4.
 //
@@ -128,11 +132,13 @@ var Files = map[string][]byte{
 	"bcm2711-rpi-400.dtb":                        Bcm2711Rpi400Dtb,
 	"overlays/miniuart-bt.dtbo":                  OverlaysMiniUartBtDtbo,
 	"overlays/upstream-pi4.dtbo":                 OverlaysUpstreamPi4Dtbo,
+	"overlays/rpi-poe-plus.dtbo":                 OverlaysRpiPoePlusDtbo,
 	"firmware/brcm/brcmfmac43455-sdio.bin":       FirmwareBrcmBrcmfmac43455SdioBin,
 	"firmware/brcm/brcmfmac43455-sdio.txt":       FirmwareBrcmBrcmfmac43455SdioTxt,
 	"firmware/brcm/brcmfmac43455-sdio.clm_blob":  FirmwareBrcmBrcmfmac43455SdioClmBlob,
 	"firmware/brcm/brcmfmac43455-sdio.Raspberry": FirmwareBrcmBrcmfmac43455SdioRaspberry,
 	"config.txt":                                 ConfigTxt,
+	"cmdline.txt":                                []byte(""),
 	"u-boot.bin":                                 UbootBin,
 	"dt.dtb":                                     DtDtb,
 	"initramfs":                                  Initramfs,

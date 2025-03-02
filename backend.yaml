@@ -1,0 +1,21 @@
+e0:92:8f:45:b4:40:
+  Arch: ""
+  BroadcastAddress: invalid IP
+  DefaultGateway: invalid IP
+  Disabled: false
+  DomainName: ""
+  DomainSearch: null
+  Hostname: ""
+  IPAddress: 10.0.155.110
+  LeaseTime: 0
+  MACAddress: 4JKPRbRA
+  NTPServers: []
+  NameServers: []
+  Netboot:
+    AllowPXE: false
+    Console: ""
+    Facility: ""
+    IPXEScript: ""
+    IPXEScriptURL: ""
+  SubnetMask: <nil>
+  VLANID: ""

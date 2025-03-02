@@ -17,3 +17,14 @@ type BackendReader interface {
 	GetByMac(context.Context, net.HardwareAddr) (*data.DHCP, *data.Netboot, error)
 	GetByIP(context.Context, net.IP) (*data.DHCP, *data.Netboot, error)
 }
+
+type BackendWriter interface {
+	// Write data (to a backend) based on a mac address
+	// and return DHCP headers and options, including netboot info.
+	Put(context.Context, net.HardwareAddr, *data.DHCP, *data.Netboot) error
+}
+
+type BackendStore interface {
+	BackendReader
+	BackendWriter
+}

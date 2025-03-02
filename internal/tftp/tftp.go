@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/appkins-org/go-redfish-uefi/internal/dhcp/handler"
 	"github.com/appkins-org/go-redfish-uefi/internal/firmware/uboot"
 	"github.com/diskfs/go-diskfs"
 	"github.com/diskfs/go-diskfs/disk"
@@ -37,18 +38,31 @@ type Handler struct {
 	RootDirectory string
 	Patch         string
 	Log           logr.Logger
+
+	backend handler.BackendReader
+}
+
+func (h Handler) OnSuccess(stats tftp.TransferStats) {
+	h.Log.Info("transfer complete", "stats", stats)
+}
+
+func (h Handler) OnFailure(stats tftp.TransferStats, err error) {
+	h.Log.Error(err, "transfer failed", "stats", stats)
 }
 
 // ListenAndServe sets up the listener on the given address and serves TFTP requests.
-func (r *Server) ListenAndServe(ctx context.Context, addr netip.AddrPort) error {
+func (r *Server) ListenAndServe(ctx context.Context, addr netip.AddrPort, backend handler.BackendReader) error {
 	tftpHandler := &Handler{
 		ctx:           ctx,
 		RootDirectory: r.RootDirectory,
 		Patch:         r.Patch,
 		Log:           r.Logger,
+		backend:       backend,
 	}
 
 	s := tftp.NewServer(tftpHandler.HandleRead, tftpHandler.HandleWrite)
+
+	s.SetHook(tftpHandler)
 
 	a, err := net.ResolveUDPAddr("udp", addr.String())
 	if err != nil {
@@ -82,6 +96,25 @@ func Serve(_ context.Context, conn net.PacketConn, s *tftp.Server) error {
 
 // HandleRead handlers TFTP GET requests. The function signature satisfies the tftp.Server.readHandler parameter type.
 func (h *Handler) HandleRead(fullfilepath string, rf io.ReaderFrom) error {
+	outgoingTransfer, ok := rf.(tftp.OutgoingTransfer)
+	if !ok {
+		err := fmt.Errorf("invalid type: %w", os.ErrInvalid)
+		h.Log.Error(err, "invalid type", "type", fmt.Sprintf("%T", rf))
+	}
+
+	remoteAddr := outgoingTransfer.RemoteAddr()
+	h.Log.Info("handle read - client output", "remoteAddr", remoteAddr, "event", "put", "filename", fullfilepath)
+
+	dhcpInfo, netboot, err := h.backend.GetByIP(h.ctx, remoteAddr.IP)
+	if err != nil {
+		h.Log.Error(err, "failed to get dhcp info", "remoteAddr", remoteAddr)
+	}
+
+	if dhcpInfo == nil || netboot == nil {
+		err := fmt.Errorf("failed to get dhcp info: %w", os.ErrNotExist)
+		h.Log.Error(err, "failed to get dhcp info", "remoteAddr", remoteAddr)
+	}
+
 	content, ok := binary.Files[filepath.Base(fullfilepath)]
 	if ok {
 		return h.HandleIpxeRead(fullfilepath, rf, content)
@@ -355,7 +388,11 @@ func (h *Handler) createFile(root *Root, filename string, content []byte) error 
 }
 
 func (h *Handler) HandleIpxeRead(filename string, rf io.ReaderFrom, content []byte) error {
-	content, err := binary.Patch(content, []byte(h.Patch))
+	patch := h.Patch
+	if true {
+		patch += fmt.Sprintf("\n  %s\n  %s", "echo -n 'ipxe booting...'", "sanboot")
+	}
+	content, err := binary.Patch(content, []byte(patch))
 	if err != nil {
 		h.Log.Error(err, "failed to patch binary")
 		return err
@@ -374,6 +411,16 @@ func (h *Handler) HandleIpxeRead(filename string, rf io.ReaderFrom, content []by
 
 // HandleWrite handles TFTP PUT requests. It will always return an error. This library does not support PUT.
 func (h *Handler) HandleWrite(filename string, wt io.WriterTo) error {
+
+	outgoingTransfer, ok := wt.(tftp.OutgoingTransfer)
+	if !ok {
+		err := fmt.Errorf("invalid type: %w", os.ErrInvalid)
+		h.Log.Error(err, "invalid type", "type", fmt.Sprintf("%T", wt))
+	}
+
+	remoteAddr := outgoingTransfer.RemoteAddr()
+	h.Log.Info("client", "remoteAddr", remoteAddr, "event", "put", "filename", filename)
+
 	root, err := os.OpenRoot(h.RootDirectory)
 	if err != nil {
 		h.Log.Error(err, "opening root directory failed", "rootDirectory", h.RootDirectory)

@@ -46,13 +46,14 @@ type DhcpConfig struct {
 }
 
 type Config struct {
-	Address  string                           `yaml:"address" mapstructure:"address"`
-	Port     int                              `yaml:"port" mapstructure:"port"`
-	Unifi    UnifiConfig                      `yaml:"unifi" mapstructure:"unifi"`
-	Tftp     TftpConfig                       `yaml:"tftp" mapstructure:"tftp"`
-	Dhcp     DhcpConfig                       `yaml:"dhcp" mapstructure:"dhcp"`
-	Systems  map[string]redfish.RedfishSystem `yaml:"systems" mapstructure:"systems"`
-	LogLevel string                           `yaml:"log_level" mapstructure:"log_level"`
+	Address         string                           `yaml:"address" mapstructure:"address"`
+	Port            int                              `yaml:"port" mapstructure:"port"`
+	Unifi           UnifiConfig                      `yaml:"unifi" mapstructure:"unifi"`
+	Tftp            TftpConfig                       `yaml:"tftp" mapstructure:"tftp"`
+	Dhcp            DhcpConfig                       `yaml:"dhcp" mapstructure:"dhcp"`
+	Systems         map[string]redfish.RedfishSystem `yaml:"systems" mapstructure:"systems"`
+	LogLevel        string                           `yaml:"log_level" mapstructure:"log_level"`
+	BackendFilePath string                           `yaml:"backend_file_path" mapstructure:"backend_file_path"`
 }
 
 func NewConfig() (conf *Config, err error) {
@@ -68,10 +69,11 @@ func NewConfig() (conf *Config, err error) {
 
 	viper.SetDefault("address", "0.0.0.0")
 	viper.SetDefault("port", 8080)
+	viper.SetDefault("backend_file_path", "backend.yaml")
 	viper.SetDefault("unifi.username", "")
 	viper.SetDefault("unifi.password", "")
 	viper.SetDefault("unifi.endpoint", "")
-	viper.SetDefault("unifi.site", "")
+	viper.SetDefault("unifi.site", "default")
 	viper.SetDefault("unifi.device", "")
 	viper.SetDefault("tftp.address", "0.0.0.0")
 	viper.SetDefault("tftp.port", 69)

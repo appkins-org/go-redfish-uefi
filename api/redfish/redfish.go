@@ -4,30 +4,38 @@ import (
 	"context"
 	"errors"
 	"net/http"
-
-	"github.com/gin-gonic/gin"
 )
 
-func (r *RedfishServer) ListenAndServe(ctx context.Context, addr string) error {
-	h := gin.Default()
+func (server *RedfishServer) ListenAndServe(ctx context.Context, addr string, handlers map[string]func(http.ResponseWriter, *http.Request)) error {
+	r := http.NewServeMux()
 
-	RegisterHandlers(h, r)
+	options := StdHTTPServerOptions{
+		BaseURL:    addr,
+		BaseRouter: r,
+	}
+
+	for path, handler := range handlers {
+		r.HandleFunc(path, handler)
+	}
+
+	h := HandlerWithOptions(server, options)
 
 	s := &http.Server{
 		Handler: h,
-		Addr:    addr,
+
+		Addr: addr,
 	}
 
 	go func() {
 		<-ctx.Done()
-		r.Logger.Info("shutting down http server")
+		server.Logger.Info("shutting down http server")
 		_ = s.Shutdown(ctx)
 	}()
 	if err := s.ListenAndServe(); err != nil {
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
-		r.Logger.Error(err, "listen and serve http")
+		server.Logger.Error(err, "listen and serve http")
 		return err
 	}
 

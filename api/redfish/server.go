@@ -3,18 +3,21 @@ package redfish
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
 	"net/http/cookiejar"
+	"net/netip"
 	"os"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/appkins-org/go-redfish-uefi/internal/dhcp/data"
+	"github.com/appkins-org/go-redfish-uefi/internal/dhcp/handler"
 	"github.com/appkins-org/go-redfish-uefi/internal/firmware/varstore"
-	"github.com/gin-gonic/gin"
 	"github.com/go-logr/logr"
 	"github.com/ubiquiti-community/go-unifi/unifi"
 )
@@ -92,9 +95,11 @@ type RedfishServer struct {
 	client *unifi.Client
 
 	Logger logr.Logger
+
+	backend handler.BackendStore
 }
 
-func NewRedfishServer(cfg RedfishServerConfig) *RedfishServer {
+func NewRedfishServer(cfg RedfishServerConfig, backend handler.BackendStore) *RedfishServer {
 	client := unifi.Client{}
 
 	if err := client.SetBaseURL(cfg.UnifiEndpoint); err != nil {
@@ -136,6 +141,7 @@ func NewRedfishServer(cfg RedfishServerConfig) *RedfishServer {
 		client:  &client,
 		Config:  &cfg,
 		Logger:  cfg.Logger,
+		backend: backend,
 	}
 
 	server.refreshSystems(context.Background())
@@ -143,8 +149,8 @@ func NewRedfishServer(cfg RedfishServerConfig) *RedfishServer {
 	return server
 }
 
-func (r *RedfishServer) refreshSystems(ctx context.Context) (err error) {
-	device, err := r.client.GetDeviceByMAC(ctx, r.Config.UnifiSite, r.Config.UnifiDevice)
+func (s *RedfishServer) refreshSystems(ctx context.Context) (err error) {
+	device, err := s.client.GetDeviceByMAC(ctx, s.Config.UnifiSite, s.Config.UnifiDevice)
 	if err != nil {
 		panic(err)
 	}
@@ -155,7 +161,7 @@ func (r *RedfishServer) refreshSystems(ctx context.Context) (err error) {
 
 	for _, port := range device.PortOverrides {
 
-		sys, ok := r.Systems[port.PortIDX]
+		sys, ok := s.Systems[port.PortIDX]
 		if !ok {
 			sys = RedfishSystem{
 				UnifiPort: port.PortIDX,
@@ -165,17 +171,17 @@ func (r *RedfishServer) refreshSystems(ctx context.Context) (err error) {
 		}
 		sys.PoeMode = port.PoeMode
 
-		r.Systems[port.PortIDX] = sys
+		s.Systems[port.PortIDX] = sys
 	}
 
-	if clients, err := r.client.ListActiveClients(ctx, r.Config.UnifiSite); err != nil {
+	if clients, err := s.client.ListActiveClients(ctx, s.Config.UnifiSite); err != nil {
 		panic(err)
 	} else {
 		for _, c := range clients {
 
-			if c.UplinkMac == r.Config.UnifiDevice {
+			if c.UplinkMac == s.Config.UnifiDevice {
 
-				sys, ok := r.Systems[c.SwPort]
+				sys, ok := s.Systems[c.SwPort]
 				if !ok {
 					sys = RedfishSystem{
 						UnifiPort: c.SwPort,
@@ -187,23 +193,47 @@ func (r *RedfishServer) refreshSystems(ctx context.Context) (err error) {
 				sys.MacAddress = c.Mac
 				sys.IpAddress = c.IP
 
-				firmware := strings.Join([]string{r.Config.TftpRoot, sys.MacAddress, "RPI_EFI.fd"}, string(os.PathSeparator))
+				firmware := strings.Join([]string{s.Config.TftpRoot, sys.MacAddress, "RPI_EFI.fd"}, string(os.PathSeparator))
 
 				sys.EfiVariableStore, err = varstore.NewEfiVariableStore(firmware)
 				if err != nil {
-					r.Logger.Error(err, "failed to create EFI variable store", "firmware", firmware)
+					s.Logger.Error(err, "failed to create EFI variable store", "firmware", firmware)
 				}
 
-				r.Systems[c.SwPort] = sys
+				s.Systems[c.SwPort] = sys
 			}
+		}
+	}
+
+	for _, sys := range s.Systems {
+
+		if sys.MacAddress == "" {
+			continue
+		}
+
+		dhcp := data.DHCP{}
+
+		if mac, err := net.ParseMAC(sys.MacAddress); err == nil {
+			dhcp.MACAddress = mac
+
+			if ip, err := netip.ParseAddr(sys.IpAddress); err == nil {
+				dhcp.IPAddress = ip
+			}
+
+			s.backend.Put(ctx, mac, &dhcp, nil)
+
+		} else {
+			s.Logger.Error(err, "failed to parse MAC address", "mac", sys.MacAddress)
+
+			continue
 		}
 	}
 
 	return
 }
 
-func (r *RedfishServer) updateDevicePort(ctx context.Context, portIdx int, poeMode string) (device *unifi.Device, err error) {
-	device, err = r.client.GetDeviceByMAC(ctx, r.Config.UnifiSite, r.Config.UnifiDevice)
+func (s *RedfishServer) updateDevicePort(ctx context.Context, portIdx int, poeMode string) (device *unifi.Device, err error) {
+	device, err = s.client.GetDeviceByMAC(ctx, s.Config.UnifiSite, s.Config.UnifiDevice)
 	if err != nil {
 		return
 	}
@@ -213,12 +243,12 @@ func (r *RedfishServer) updateDevicePort(ctx context.Context, portIdx int, poeMo
 			device.PortOverrides[i].StpPortMode = false
 		}
 	}
-	device, err = r.client.UpdateDevice(ctx, r.Config.UnifiSite, device)
+	device, err = s.client.UpdateDevice(ctx, s.Config.UnifiSite, device)
 	return
 }
 
-func (r *RedfishServer) getPortState(ctx context.Context, macAddress string, p int) (deviceId string, port unifi.DevicePortOverrides, err error) {
-	dev, err := r.client.GetDeviceByMAC(ctx, "default", macAddress)
+func (s *RedfishServer) getPortState(ctx context.Context, macAddress string, p int) (deviceId string, port unifi.DevicePortOverrides, err error) {
+	dev, err := s.client.GetDeviceByMAC(ctx, "default", macAddress)
 	if err != nil {
 		err = fmt.Errorf("error getting device by MAC Address %s: %v", macAddress, err)
 		return
@@ -241,12 +271,13 @@ func (r *RedfishServer) getPortState(ctx context.Context, macAddress string, p i
 }
 
 // CreateVirtualDisk implements ServerInterface.
-func (r *RedfishServer) CreateVirtualDisk(c *gin.Context, systemId string, storageControllerId string) {
+func (s *RedfishServer) CreateVirtualDisk(w http.ResponseWriter, r *http.Request, systemId string, storageControllerId string) {
 
 	req := CreateVirtualDiskRequestBody{}
 
-	if err := c.BindJSON(&req); err != nil {
-		c.JSON(400, gin.H{"error": err.Error()})
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(400)
+		w.Write([]byte(fmt.Sprintf("error decoding request: %s", err)))
 		return
 	}
 
@@ -254,38 +285,38 @@ func (r *RedfishServer) CreateVirtualDisk(c *gin.Context, systemId string, stora
 }
 
 // DeleteVirtualdisk implements ServerInterface.
-func (r *RedfishServer) DeleteVirtualdisk(c *gin.Context, systemId string, storageId string) {
+func (s *RedfishServer) DeleteVirtualdisk(w http.ResponseWriter, r *http.Request, systemId string, storageId string) {
 	panic("unimplemented")
 }
 
 // EjectVirtualMedia implements ServerInterface.
-func (r *RedfishServer) EjectVirtualMedia(c *gin.Context, managerId string, virtualMediaId string) {
+func (s *RedfishServer) EjectVirtualMedia(w http.ResponseWriter, r *http.Request, managerId string, virtualMediaId string) {
 	panic("unimplemented")
 }
 
 // FirmwareInventory implements ServerInterface.
-func (r *RedfishServer) FirmwareInventory(c *gin.Context) {
+func (s *RedfishServer) FirmwareInventory(w http.ResponseWriter, r *http.Request) {
 
 	panic("unimplemented")
 }
 
 // FirmwareInventoryDownloadImage implements ServerInterface.
-func (r *RedfishServer) FirmwareInventoryDownloadImage(c *gin.Context) {
+func (s *RedfishServer) FirmwareInventoryDownloadImage(w http.ResponseWriter, r *http.Request) {
 	panic("unimplemented")
 }
 
 // GetManager implements ServerInterface.
-func (r *RedfishServer) GetManager(c *gin.Context, managerId string) {
+func (s *RedfishServer) GetManager(w http.ResponseWriter, r *http.Request, managerId string) {
 	panic("unimplemented")
 }
 
 // GetManagerVirtualMedia implements ServerInterface.
-func (r *RedfishServer) GetManagerVirtualMedia(c *gin.Context, managerId string, virtualMediaId string) {
+func (s *RedfishServer) GetManagerVirtualMedia(w http.ResponseWriter, r *http.Request, managerId string, virtualMediaId string) {
 	panic("unimplemented")
 }
 
 // GetRoot implements ServerInterface.
-func (r *RedfishServer) GetRoot(c *gin.Context) {
+func (s *RedfishServer) GetRoot(w http.ResponseWriter, r *http.Request) {
 
 	root := Root{
 		OdataId:        ptr("/redfish/v1"),
@@ -298,34 +329,40 @@ func (r *RedfishServer) GetRoot(c *gin.Context) {
 		},
 	}
 
-	c.JSON(200, &root)
+	w.WriteHeader(200)
+	err := json.NewEncoder(w).Encode(root)
+	if err != nil {
+		w.WriteHeader(500)
+		w.Write([]byte(fmt.Sprintf("error encoding response: %s", err)))
+	}
 }
 
 // GetSoftwareInventory implements ServerInterface.
-func (r *RedfishServer) GetSoftwareInventory(c *gin.Context, softwareId string) {
+func (s *RedfishServer) GetSoftwareInventory(w http.ResponseWriter, r *http.Request, softwareId string) {
 	panic("unimplemented")
 }
 
 // GetSystem implements ServerInterface.
-func (r *RedfishServer) GetSystem(c *gin.Context, systemId string) {
+func (s *RedfishServer) GetSystem(w http.ResponseWriter, r *http.Request, systemId string) {
 
-	err := r.refreshSystems(c.Request.Context())
+	err := s.refreshSystems(r.Context())
 	if err != nil {
-		c.JSON(500, gin.H{"error": err.Error()})
+		w.WriteHeader(500)
 		return
 	}
 
 	systemIdInt, err := strconv.ParseInt(systemId, 10, 64)
 	if err != nil {
-		c.JSON(400, gin.H{"error": err.Error()})
+		w.WriteHeader(400)
+		w.Write([]byte(fmt.Sprintf("error parsing system id: %s", err)))
 		return
 	}
 
-	s := r.Systems[int(systemIdInt)]
+	sy := s.Systems[int(systemIdInt)]
 
 	resp := ComputerSystem{
 		Id:         &systemId,
-		PowerState: s.GetPowerState(),
+		PowerState: sy.GetPowerState(),
 		Links: &SystemLinks{
 			Chassis:   &[]IdRef{{OdataId: ptr("/redfish/v1/Chassis/1")}},
 			ManagedBy: &[]IdRef{{OdataId: ptr("/redfish/v1/Managers/1")}},
@@ -335,6 +372,7 @@ func (r *RedfishServer) GetSystem(c *gin.Context, systemId string) {
 			BootSourceOverrideTarget:  ptr(None),
 			BootSourceOverrideTargetRedfishAllowableValues: &[]BootSource{
 				Pxe,
+				Hdd,
 				None,
 			},
 		},
@@ -355,48 +393,56 @@ func (r *RedfishServer) GetSystem(c *gin.Context, systemId string) {
 		Status: &Status{
 			State: ptr(StateEnabled),
 		},
-		UUID: ptr(s.MacAddress),
+		UUID: ptr(sy.MacAddress),
 	}
 
-	c.JSON(200, &resp)
+	b, err := json.Marshal(resp)
+	if err != nil {
+		w.WriteHeader(500)
+		w.Write([]byte(fmt.Sprintf("error marshalling response: %s", err)))
+		return
+	}
+
+	w.WriteHeader(200)
+	w.Write(b)
 }
 
 // GetTask implements ServerInterface.
-func (r *RedfishServer) GetTask(c *gin.Context, taskId string) {
+func (s *RedfishServer) GetTask(w http.ResponseWriter, r *http.Request, taskId string) {
 	panic("unimplemented")
 }
 
 // GetTaskList implements ServerInterface.
-func (r *RedfishServer) GetTaskList(c *gin.Context) {
+func (s *RedfishServer) GetTaskList(w http.ResponseWriter, r *http.Request) {
 	panic("unimplemented")
 }
 
 // GetVolumes implements ServerInterface.
-func (r *RedfishServer) GetVolumes(c *gin.Context, systemId string, storageControllerId string) {
+func (s *RedfishServer) GetVolumes(w http.ResponseWriter, r *http.Request, systemId string, storageControllerId string) {
 	panic("unimplemented")
 }
 
 // InsertVirtualMedia implements ServerInterface.
-func (r *RedfishServer) InsertVirtualMedia(c *gin.Context, managerId string, virtualMediaId string) {
+func (s *RedfishServer) InsertVirtualMedia(w http.ResponseWriter, r *http.Request, managerId string, virtualMediaId string) {
 	panic("unimplemented")
 }
 
 // ListManagerVirtualMedia implements ServerInterface.
-func (r *RedfishServer) ListManagerVirtualMedia(c *gin.Context, managerId string) {
+func (s *RedfishServer) ListManagerVirtualMedia(w http.ResponseWriter, r *http.Request, managerId string) {
 	panic("unimplemented")
 }
 
 // ListManagers implements ServerInterface.
-func (r *RedfishServer) ListManagers(c *gin.Context) {
+func (s *RedfishServer) ListManagers(w http.ResponseWriter, r *http.Request) {
 	panic("unimplemented")
 }
 
 // ListSystems implements ServerInterface.
-func (r *RedfishServer) ListSystems(c *gin.Context) {
+func (s *RedfishServer) ListSystems(w http.ResponseWriter, r *http.Request) {
 
 	ids := make([]IdRef, 0)
 
-	for i := range r.Systems {
+	for i := range s.Systems {
 		odataId := fmt.Sprintf("/redfish/v1/Systems/%d", i)
 		ids = append(ids, IdRef{
 			OdataId: &odataId,
@@ -412,115 +458,121 @@ func (r *RedfishServer) ListSystems(c *gin.Context) {
 		MembersOdataCount: ptr(len(ids)),
 	}
 
-	c.JSON(200, &systems)
+	w.WriteHeader(200)
+	err := json.NewEncoder(w).Encode(systems)
+	if err != nil {
+		w.WriteHeader(500)
+		w.Write([]byte(fmt.Sprintf("error encoding response: %s", err)))
+	}
 }
 
 // ResetIdrac implements ServerInterface.
-func (r *RedfishServer) ResetIdrac(c *gin.Context) {
+func (s *RedfishServer) ResetIdrac(w http.ResponseWriter, r *http.Request) {
 	panic("unimplemented")
 }
 
 // ResetSystem implements ServerInterface.
-func (r *RedfishServer) ResetSystem(c *gin.Context, systemId string) {
+func (s *RedfishServer) ResetSystem(w http.ResponseWriter, r *http.Request, systemId string) {
 
 	req := ResetSystemJSONRequestBody{}
-	if err := c.BindJSON(&req); err != nil {
-		c.JSON(500, redfishError(err))
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(500)
 		return
 	}
 
 	systemIdInt, err := strconv.ParseInt(systemId, 10, 64)
 	if err != nil {
-		c.JSON(500, redfishError(err))
+		w.WriteHeader(500)
 		return
 	}
 
-	err = r.refreshSystems(c.Request.Context())
+	err = s.refreshSystems(r.Context())
 	if err != nil {
-		c.JSON(500, redfishError(err))
+		w.WriteHeader(500)
 		return
 	}
 
-	sys, ok := r.Systems[int(systemIdInt)]
+	sys, ok := s.Systems[int(systemIdInt)]
 	if !ok {
-		c.JSON(404, redfishError(fmt.Errorf("system not found")))
+		w.WriteHeader(404)
+		w.Write([]byte("system not found"))
 		return
 	}
 
 	if sys.PoeMode == "off" {
-		_, err := r.updateDevicePort(c.Request.Context(), sys.UnifiPort, "auto")
+		_, err := s.updateDevicePort(r.Context(), sys.UnifiPort, "auto")
 		if err != nil {
-			c.JSON(500, redfishError(err))
+			w.WriteHeader(500)
 			return
 		}
 		sys.PoeMode = "auto"
 	} else if *req.ResetType == ResetTypePowerCycle {
-		_, err := r.client.ExecuteCmd(c.Request.Context(), r.Config.UnifiSite, "devmgr", unifi.Cmd{
+		_, err := s.client.ExecuteCmd(r.Context(), s.Config.UnifiSite, "devmgr", unifi.Cmd{
 			Command: "power-cycle",
 			MAC:     sys.DeviceMac,
 			PortIDX: ptr(sys.UnifiPort),
 		})
 		if err != nil {
-			c.JSON(500, redfishError(err))
+			w.WriteHeader(500)
 			return
 		}
-		c.Status(204)
+		w.WriteHeader(204)
 		return
 	} else {
 		switch *req.ResetType {
 		case ResetTypeOn:
-			_, err := r.updateDevicePort(c.Request.Context(), sys.UnifiPort, "auto")
+			_, err := s.updateDevicePort(r.Context(), sys.UnifiPort, "auto")
 			if err != nil {
-				c.JSON(500, redfishError(err))
+				w.WriteHeader(500)
 				return
 			}
-			c.Status(204)
+			w.WriteHeader(204)
 			return
 		case ResetTypeForceOn:
-			_, err := r.updateDevicePort(c.Request.Context(), sys.UnifiPort, "auto")
+			_, err := s.updateDevicePort(r.Context(), sys.UnifiPort, "auto")
 			if err != nil {
-				c.JSON(500, redfishError(err))
+				w.WriteHeader(500)
 				return
 			}
-			c.Status(204)
+			w.WriteHeader(204)
 			return
 		case ResetTypeForceOff:
-			_, err := r.updateDevicePort(c.Request.Context(), sys.UnifiPort, "off")
+			_, err := s.updateDevicePort(r.Context(), sys.UnifiPort, "off")
 			if err != nil {
-				c.JSON(500, redfishError(err))
+				w.WriteHeader(500)
 				return
 			}
-			c.Status(204)
+			w.WriteHeader(204)
 			return
 		}
 	}
 }
 
 // SetSystem implements ServerInterface.
-func (r *RedfishServer) SetSystem(c *gin.Context, systemId string) {
+func (s *RedfishServer) SetSystem(w http.ResponseWriter, r *http.Request, systemId string) {
 
 	req := SetSystemJSONRequestBody{}
-
-	if err := c.BindJSON(&req); err != nil {
-		c.JSON(500, redfishError(err))
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(500)
 		return
 	}
 
 	systemIdInt, err := strconv.ParseInt(systemId, 10, 64)
 	if err != nil {
-		c.JSON(500, redfishError(err))
+		w.WriteHeader(500)
 		return
 	}
 
-	err = r.refreshSystems(c.Request.Context())
+	err = s.refreshSystems(r.Context())
 	if err != nil {
-		c.JSON(500, redfishError(err))
+		w.WriteHeader(500)
 		return
 	}
 
-	sys, ok := r.Systems[int(systemIdInt)]
+	sys, ok := s.Systems[int(systemIdInt)]
 	if !ok {
-		c.JSON(404, redfishError(fmt.Errorf("system not found")))
+		w.WriteHeader(404)
+		w.Write([]byte("system not found"))
 		return
 	}
 
@@ -530,24 +582,24 @@ func (r *RedfishServer) SetSystem(c *gin.Context, systemId string) {
 
 		sys.PoeMode = poeMode
 
-		_, err := r.updateDevicePort(c.Request.Context(), sys.UnifiPort, sys.PoeMode)
+		_, err := s.updateDevicePort(r.Context(), sys.UnifiPort, sys.PoeMode)
 		if err != nil {
-			c.JSON(500, redfishError(err))
+			w.WriteHeader(500)
 			return
 		}
 	}
 
-	r.Systems[int(systemIdInt)] = sys
+	s.Systems[int(systemIdInt)] = sys
 
-	c.JSON(204, nil)
+	w.WriteHeader(204)
 }
 
 // UpdateService implements ServerInterface.
-func (r *RedfishServer) UpdateService(c *gin.Context) {
+func (s *RedfishServer) UpdateService(w http.ResponseWriter, r *http.Request) {
 	panic("unimplemented")
 }
 
 // UpdateServiceSimpleUpdate implements ServerInterface.
-func (r *RedfishServer) UpdateServiceSimpleUpdate(c *gin.Context) {
+func (s *RedfishServer) UpdateServiceSimpleUpdate(w http.ResponseWriter, r *http.Request) {
 	panic("unimplemented")
 }

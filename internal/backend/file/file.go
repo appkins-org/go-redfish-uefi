@@ -196,6 +196,160 @@ func (w *Watcher) GetByIP(ctx context.Context, ip net.IP) (*data.DHCP, *data.Net
 	return nil, nil, err
 }
 
+func (w *Watcher) Put(ctx context.Context, mac net.HardwareAddr, d *data.DHCP, n *data.Netboot) error {
+	tracer := otel.Tracer(tracerName)
+	_, span := tracer.Start(ctx, "backend.file.Put")
+	defer span.End()
+
+	nameServers := make([]string, 0, len(d.NameServers))
+	for _, ns := range d.NameServers {
+		nameServers = append(nameServers, ns.String())
+	}
+
+	ntpServers := make([]string, 0, len(d.NTPServers))
+	for _, ns := range d.NTPServers {
+		ntpServers = append(ntpServers, ns.String())
+	}
+
+	// get data from file, translate it, then pass it into setDHCPOpts and setNetworkBootOpts
+	w.dataMu.RLock()
+	data := w.data
+	w.dataMu.RUnlock()
+	r := make(map[string]dhcp)
+	if err := yaml.Unmarshal(data, &r); err != nil {
+		err := fmt.Errorf("%w: %w", err, errFileFormat)
+		w.Log.Error(err, "failed to unmarshal file data")
+		span.SetStatus(codes.Error, err.Error())
+
+		return err
+	}
+
+	if r == nil {
+		r = map[string]dhcp{}
+	}
+
+	if v, ok := r[mac.String()]; ok {
+		// found a record for this mac address
+		v.MACAddress = mac
+		d, n, err := w.translate(v)
+		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+		}
+		if d.IPAddress.String() != "" && d.IPAddress.String() != v.IPAddress {
+			v.IPAddress = d.IPAddress.String()
+		}
+		if d.SubnetMask.String() != "" && d.SubnetMask.String() != v.SubnetMask {
+			v.SubnetMask = d.SubnetMask.String()
+		}
+		if d.DefaultGateway.String() != "" && d.DefaultGateway.String() != v.DefaultGateway {
+			v.DefaultGateway = d.DefaultGateway.String()
+		}
+		if len(d.NameServers) != 0 && len(d.NameServers) != len(v.NameServers) {
+			nameServers := make([]string, 0, len(d.NameServers))
+			for _, ns := range d.NameServers {
+				nameServers = append(nameServers, ns.String())
+			}
+			v.NameServers = nameServers
+		}
+		if d.Hostname != "" && d.Hostname != v.Hostname {
+			v.Hostname = d.Hostname
+		}
+		if d.DomainName != "" && d.DomainName != v.DomainName {
+			v.DomainName = d.DomainName
+		}
+		if d.BroadcastAddress.String() != "" && d.BroadcastAddress.String() != v.BroadcastAddress {
+			v.BroadcastAddress = d.BroadcastAddress.String()
+		}
+		if len(ntpServers) != 0 && len(ntpServers) != len(v.NTPServers) {
+			v.NTPServers = ntpServers
+		}
+		if d.VLANID != "" && d.VLANID != v.VLANID {
+			v.VLANID = d.VLANID
+		}
+		if d.LeaseTime != 0 && d.LeaseTime != uint32(v.LeaseTime) {
+			v.LeaseTime = int(d.LeaseTime)
+		}
+		if d.Arch != "" && d.Arch != v.Arch {
+			v.Arch = d.Arch
+		}
+		if len(d.DomainSearch) != 0 && len(d.DomainSearch) != len(v.DomainSearch) {
+			v.DomainSearch = d.DomainSearch
+		}
+		if d.Disabled != v.Disabled {
+			v.Disabled = d.Disabled
+		}
+
+		if n != nil {
+
+			if n.AllowNetboot != v.Netboot.AllowPXE {
+				v.Netboot.AllowPXE = n.AllowNetboot
+			}
+			if n.IPXEScriptURL.String() != "" && n.IPXEScriptURL.String() != v.Netboot.IPXEScriptURL {
+				v.Netboot.IPXEScriptURL = n.IPXEScriptURL.String()
+			}
+			if n.IPXEScript != "" && n.IPXEScript != v.Netboot.IPXEScript {
+				v.Netboot.IPXEScript = n.IPXEScript
+			}
+			if n.Console != "" && n.Console != v.Netboot.Console {
+				v.Netboot.Console = n.Console
+			}
+			if n.Facility != "" && n.Facility != v.Netboot.Facility {
+				v.Netboot.Facility = n.Facility
+			}
+		}
+		r[mac.String()] = v
+	} else {
+		dhcpValue := dhcp{
+			MACAddress:       mac,
+			IPAddress:        d.IPAddress.String(),
+			SubnetMask:       d.SubnetMask.String(),
+			DefaultGateway:   d.DefaultGateway.String(),
+			NameServers:      nameServers,
+			Hostname:         d.Hostname,
+			DomainName:       d.DomainName,
+			BroadcastAddress: d.BroadcastAddress.String(),
+			NTPServers:       ntpServers,
+			VLANID:           d.VLANID,
+			LeaseTime:        int(d.LeaseTime),
+			Arch:             d.Arch,
+			DomainSearch:     d.DomainSearch,
+			Disabled:         d.Disabled,
+		}
+
+		if n != nil {
+			dhcpValue.Netboot = netboot{
+				AllowPXE:      n.AllowNetboot,
+				IPXEScriptURL: n.IPXEScriptURL.String(),
+				IPXEScript:    n.IPXEScript,
+				Console:       n.Console,
+				Facility:      n.Facility,
+			}
+		}
+
+		r[mac.String()] = dhcpValue
+	}
+
+	newData, err := yaml.Marshal(r)
+	if err != nil {
+		err := fmt.Errorf("%w: %w", err, errFileFormat)
+		w.Log.Error(err, "failed to marshal file data")
+		span.SetStatus(codes.Error, err.Error())
+		return err
+	}
+
+	w.dataMu.RLock()
+
+	if err := os.WriteFile(w.FilePath, newData, 0644); err != nil {
+		err := fmt.Errorf("%w: %w", err, errFileFormat)
+		w.Log.Error(err, "failed to write file data")
+		span.SetStatus(codes.Error, err.Error())
+	}
+
+	w.dataMu.RUnlock()
+
+	return nil
+}
+
 // Start starts watching a file for changes and updates the in memory data (w.data) on changes.
 // Start is a blocking method. Use a context cancellation to exit.
 func (w *Watcher) Start(ctx context.Context) {
