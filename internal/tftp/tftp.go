@@ -14,12 +14,9 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/appkins-org/go-redfish-uefi/internal/dhcp/data"
 	"github.com/appkins-org/go-redfish-uefi/internal/dhcp/handler"
 	"github.com/appkins-org/go-redfish-uefi/internal/firmware/uboot"
-	"github.com/diskfs/go-diskfs"
-	"github.com/diskfs/go-diskfs/disk"
-	"github.com/diskfs/go-diskfs/filesystem"
-	"github.com/diskfs/go-diskfs/partition/mbr"
 	"github.com/go-logr/logr"
 
 	"github.com/pin/tftp/v3"
@@ -94,8 +91,7 @@ func Serve(_ context.Context, conn net.PacketConn, s *tftp.Server) error {
 	return s.Serve(conn)
 }
 
-// HandleRead handlers TFTP GET requests. The function signature satisfies the tftp.Server.readHandler parameter type.
-func (h *Handler) HandleRead(fullfilepath string, rf io.ReaderFrom) error {
+func (h *Handler) getDhcpInfo(ctx context.Context, rf io.ReaderFrom) (*data.DHCP, *data.Netboot, *data.Power, error) {
 	outgoingTransfer, ok := rf.(tftp.OutgoingTransfer)
 	if !ok {
 		err := fmt.Errorf("invalid type: %w", os.ErrInvalid)
@@ -103,7 +99,7 @@ func (h *Handler) HandleRead(fullfilepath string, rf io.ReaderFrom) error {
 	}
 
 	remoteAddr := outgoingTransfer.RemoteAddr()
-	h.Log.Info("handle read - client output", "remoteAddr", remoteAddr, "event", "put", "filename", fullfilepath)
+	h.Log.Info("client", "remoteAddr", remoteAddr, "event", "put")
 
 	dhcpInfo, netboot, _, err := h.backend.GetByIP(h.ctx, remoteAddr.IP)
 	if err != nil {
@@ -113,6 +109,16 @@ func (h *Handler) HandleRead(fullfilepath string, rf io.ReaderFrom) error {
 	if dhcpInfo == nil || netboot == nil {
 		err := fmt.Errorf("failed to get dhcp info: %w", os.ErrNotExist)
 		h.Log.Error(err, "failed to get dhcp info", "remoteAddr", remoteAddr)
+	}
+
+	return dhcpInfo, netboot, nil, nil
+}
+
+// HandleRead handlers TFTP GET requests. The function signature satisfies the tftp.Server.readHandler parameter type.
+func (h *Handler) HandleRead(fullfilepath string, rf io.ReaderFrom) error {
+	dhcpInfo, netboot, _, err := h.getDhcpInfo(h.ctx, rf)
+	if err != nil {
+		return err
 	}
 
 	patch := h.Patch
@@ -131,10 +137,6 @@ func (h *Handler) HandleRead(fullfilepath string, rf io.ReaderFrom) error {
 		return fmt.Errorf("opening root directory %s: %w", h.RootDirectory, err)
 	}
 	defer root.Close()
-
-	if strings.Contains(fullfilepath, "boot.img") {
-		return h.createUboot(root, fullfilepath, rf)
-	}
 
 	parts := strings.Split(fullfilepath, "/")
 
@@ -293,94 +295,6 @@ func (h *Handler) HandleRead(fullfilepath string, rf io.ReaderFrom) error {
 	return nil
 }
 
-func (h *Handler) createUboot(root *Root, filename string, rf io.ReaderFrom) error {
-
-	if !root.Exists(filename) {
-		var size int64 = 20 * 1024 * 1024 // 20 MB
-
-		diskImg := strings.Join([]string{h.RootDirectory, filename}, "/")
-		defer os.Remove(diskImg)
-		bootImg, _ := diskfs.Create(diskImg, size, diskfs.SectorSizeDefault)
-
-		table := &mbr.Table{
-			LogicalSectorSize:  512,
-			PhysicalSectorSize: 512,
-			Partitions: []*mbr.Partition{
-				{
-					Bootable: false,
-					Type:     mbr.Linux,
-					Start:    2048,
-					Size:     20480,
-				},
-			},
-		}
-
-		if err := bootImg.Partition(table); err != nil {
-			h.Log.Error(err, "partitioning disk", "filename", filename)
-			return fmt.Errorf("partitioning disk: %w", err)
-		}
-
-		fs, err := bootImg.CreateFilesystem(disk.FilesystemSpec{
-			Partition: 1,
-			FSType:    filesystem.TypeFat32,
-		})
-		if err != nil {
-			h.Log.Error(err, "creating filesystem", "filename", filename)
-			return fmt.Errorf("creating filesystem: %w", err)
-		}
-
-		err = fs.Mkdir("/overlays")
-		if err != nil {
-			h.Log.Error(err, "creating directory", "filename", filename)
-			return fmt.Errorf("creating directory: %w", err)
-		}
-
-		if rw, err := fs.OpenFile("/start4.elf", os.O_CREATE|os.O_RDWR); err != nil {
-			h.Log.Error(err, "opening file", "filename", "start4.elf")
-			return fmt.Errorf("opening file: %w", err)
-		} else {
-			rw.Write(uboot.Files["start4.elf"])
-		}
-
-		if rw, err := fs.OpenFile("/snp.efi", os.O_CREATE|os.O_RDWR); err != nil {
-			h.Log.Error(err, "opening file", "filename", "snp.efi")
-			return fmt.Errorf("opening file: %w", err)
-		} else {
-			content, ok := binary.Files["snp.efi"]
-			if ok {
-				content, err := binary.Patch(content, []byte(h.Patch))
-				if err != nil {
-					h.Log.Error(err, "failed to patch binary", "filename", "snp.efi")
-					return err
-				}
-				rw.Write(content)
-			}
-		}
-
-		bootImg.Close()
-
-		if _, err := root.Stat(filename); err == nil {
-			// file exists
-			file, err := root.Open(filename)
-			if err != nil {
-				errMsg := fmt.Sprintf("opening %s: %s", filename, err.Error())
-				h.Log.Error(err, "file open failed")
-				return errors.New(errMsg)
-			}
-			n, err := rf.ReadFrom(file)
-			if err != nil {
-				errMsg := fmt.Sprintf("reading %s: %s", filename, err.Error())
-				h.Log.Error(err, "file read failed")
-				return errors.New(errMsg)
-			}
-			h.Log.Info("bytes sent", n)
-			return nil
-		}
-	}
-
-	return nil
-}
-
 func (h *Handler) createFile(root *Root, filename string, content []byte) error {
 	// If the file does not exist in the new path, but exists in the uboot.Files map, use the map.
 	newF, err := root.Create(filename)
@@ -453,13 +367,4 @@ func (h *Handler) HandleWrite(filename string, wt io.WriterTo) error {
 	}
 	h.Log.Info("bytes received", n)
 	return nil
-
-	// err := fmt.Errorf("access_violation: %w", os.ErrPermission)
-	// client := net.UDPAddr{}
-	// if rpi, ok := wt.(tftp.OutgoingTransfer); ok {
-	// 	client = rpi.RemoteAddr()
-	// }
-	// t.Log.Error(err, "client", client, "event", "put", "filename", filename)
-
-	// return err
 }
