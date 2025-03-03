@@ -3,3 +3,10 @@ redfish.yaml
 dist/
 tftpboot/
 .DS_Store
+gofish
+bin/*
+**/env/*
+**/gofiles/*
+**/*.zip
+**/DSP*
+tools/gofiles*
