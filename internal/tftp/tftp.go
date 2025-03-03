@@ -115,9 +115,14 @@ func (h *Handler) HandleRead(fullfilepath string, rf io.ReaderFrom) error {
 		h.Log.Error(err, "failed to get dhcp info", "remoteAddr", remoteAddr)
 	}
 
+	patch := h.Patch
+	if netboot != nil {
+		patch = netboot.IPXEScript
+	}
+
 	content, ok := binary.Files[filepath.Base(fullfilepath)]
 	if ok {
-		return h.HandleIpxeRead(fullfilepath, rf, content)
+		return h.HandleIpxeRead(fullfilepath, rf, content, patch)
 	}
 
 	root, err := OpenRoot(h.RootDirectory)
@@ -142,6 +147,11 @@ func (h *Handler) HandleRead(fullfilepath string, rf io.ReaderFrom) error {
 		hasMac = true
 	}
 	hasSerial := regexp.MustCompile(`^\d{2}[a-z]\d{5}$`).MatchString(prefix)
+	if hasSerial {
+		h.Log.Info("serial detected", "serial", prefix)
+		parts[0] = dhcpInfo.MACAddress.String()
+		prefix = dhcpInfo.MACAddress.String()
+	}
 
 	if hasMac {
 		rootpath := filename
@@ -198,7 +208,8 @@ func (h *Handler) HandleRead(fullfilepath string, rf io.ReaderFrom) error {
 		isPxe = true
 	}
 
-	if isPxe {
+	// TODO: Add support for PXE booting - make it a toggle feature
+	if isPxe && false {
 
 		pxeConfig := `
 		KERNEL undionly.kpxe dhcp
@@ -387,8 +398,10 @@ func (h *Handler) createFile(root *Root, filename string, content []byte) error 
 	return nil
 }
 
-func (h *Handler) HandleIpxeRead(filename string, rf io.ReaderFrom, content []byte) error {
-	patch := h.Patch
+func (h *Handler) HandleIpxeRead(filename string, rf io.ReaderFrom, content []byte, patch string) error {
+	if patch == "" {
+		patch = h.Patch
+	}
 	if true {
 		patch += fmt.Sprintf("\n  %s\n  %s", "echo -n 'ipxe booting...'", "sanboot")
 	}

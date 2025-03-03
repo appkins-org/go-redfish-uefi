@@ -88,10 +88,10 @@ type RedfishServer struct {
 	backend handler.BackendStore
 }
 
-func NewRedfishServer(cfg *config.Config, logger logr.Logger, backend handler.BackendStore) *RedfishServer {
+func NewRedfishServer(cfg *config.Config, backend handler.BackendStore) *RedfishServer {
 	server := &RedfishServer{
 		Config:  cfg,
-		Logger:  logger,
+		Logger:  cfg.Log.WithName("redfish-server"),
 		backend: backend,
 	}
 
@@ -148,7 +148,22 @@ func (s *RedfishServer) FirmwareInventoryDownloadImage(w http.ResponseWriter, r 
 
 // GetManager implements ServerInterface.
 func (s *RedfishServer) GetManager(w http.ResponseWriter, r *http.Request, managerId string) {
-	panic("unimplemented")
+
+	manager := Manager{
+		Id:        &managerId,
+		OdataId:   ptr(fmt.Sprintf("/redfish/v1/Managers/%s", managerId)),
+		OdataType: ptr("#Manager.v1_11_0.Manager"),
+		Name:      ptr("Manager"),
+		Status: &Status{
+			State: ptr(StateEnabled),
+		},
+	}
+
+	w.WriteHeader(200)
+	if err := json.NewEncoder(w).Encode(manager); err != nil {
+		w.WriteHeader(500)
+		w.Write([]byte(fmt.Sprintf("error encoding response: %s", err)))
+	}
 }
 
 // GetManagerVirtualMedia implements ServerInterface.
@@ -201,12 +216,19 @@ func (s *RedfishServer) GetSystem(w http.ResponseWriter, r *http.Request, system
 		return
 	}
 
-	_, _, pwr, err := s.backend.GetByMac(ctx, systemIdAddr)
+	dhcp, _, pwr, err := s.backend.GetByMac(ctx, systemIdAddr)
 	if err != nil {
 		w.WriteHeader(500)
 		return
 	}
 
+	defaultName := fmt.Sprintf("System %s", systemId)
+
+	if dhcp != nil {
+		if dhcp.Hostname != "" {
+			defaultName = dhcp.Hostname
+		}
+	}
 	resp := ComputerSystem{
 		Id:         &systemId,
 		PowerState: (*PowerState)(&pwr.State),
@@ -236,7 +258,7 @@ func (s *RedfishServer) GetSystem(w http.ResponseWriter, r *http.Request, system
 		},
 		OdataId:   ptr(fmt.Sprintf("/redfish/v1/Systems/%s", systemId)),
 		OdataType: ptr("#ComputerSystem.v1_11_0.ComputerSystem"),
-		Name:      ptr(fmt.Sprintf("System %s", systemId)),
+		Name:      ptr(defaultName),
 		Status: &Status{
 			State: ptr(StateEnabled),
 		},
@@ -271,17 +293,69 @@ func (s *RedfishServer) GetVolumes(w http.ResponseWriter, r *http.Request, syste
 
 // InsertVirtualMedia implements ServerInterface.
 func (s *RedfishServer) InsertVirtualMedia(w http.ResponseWriter, r *http.Request, managerId string, virtualMediaId string) {
-	panic("unimplemented")
+
+	req := InsertMediaRequestBody{}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(400)
+		w.Write([]byte(fmt.Sprintf("error decoding request: %s", err)))
+		return
+	}
+
+	w.WriteHeader(204)
 }
 
 // ListManagerVirtualMedia implements ServerInterface.
 func (s *RedfishServer) ListManagerVirtualMedia(w http.ResponseWriter, r *http.Request, managerId string) {
-	panic("unimplemented")
+
+	ids := make([]IdRef, 0)
+
+	odataId := "/redfish/v1/Managers/1/VirtualMedia/1"
+	ids = append(ids, IdRef{
+		OdataId: &odataId,
+	})
+
+	response := Collection{
+		Members:           &ids,
+		OdataContext:      ptr("/redfish/v1/$metadata#VirtualMediaCollection.VirtualMediaCollection"),
+		OdataType:         "#VirtualMediaCollection.VirtualMediaCollection",
+		Name:              ptr("Virtual Media Collection"),
+		OdataId:           "/redfish/v1/Managers/1/VirtualMedia",
+		MembersOdataCount: ptr(len(ids)),
+	}
+
+	w.WriteHeader(200)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		w.WriteHeader(500)
+		w.Write([]byte(fmt.Sprintf("error encoding response: %s", err)))
+	}
+
 }
 
 // ListManagers implements ServerInterface.
 func (s *RedfishServer) ListManagers(w http.ResponseWriter, r *http.Request) {
-	panic("unimplemented")
+
+	ids := make([]IdRef, 0)
+
+	odataId := "/redfish/v1/Managers/1"
+	ids = append(ids, IdRef{
+		OdataId: &odataId,
+	})
+
+	response := Collection{
+		Members:           &ids,
+		OdataContext:      ptr("/redfish/v1/$metadata#ManagerCollection.ManagerCollection"),
+		OdataType:         "#ManagerCollection.ManagerCollection",
+		Name:              ptr("Manager Collection"),
+		OdataId:           "/redfish/v1/Managers",
+		MembersOdataCount: ptr(len(ids)),
+	}
+
+	w.WriteHeader(200)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		w.WriteHeader(500)
+		w.Write([]byte(fmt.Sprintf("error encoding response: %s", err)))
+	}
 }
 
 // ListSystems implements ServerInterface.

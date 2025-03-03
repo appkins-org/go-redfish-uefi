@@ -82,6 +82,8 @@ type Watcher struct {
 	dataMu  sync.RWMutex // protects data
 	data    []byte       // data from file
 	watcher *fsnotify.Watcher
+
+	entries map[string]dhcp
 }
 
 // NewWatcher creates a new file watcher.
@@ -98,6 +100,7 @@ func NewWatcher(l logr.Logger, f string) (*Watcher, error) {
 		FilePath: f,
 		watcher:  watcher,
 		Log:      l,
+		entries:  make(map[string]dhcp),
 	}
 
 	w.fileMu.RLock()
@@ -364,13 +367,13 @@ func (w *Watcher) Put(ctx context.Context, mac net.HardwareAddr, d *data.DHCP, n
 		return err
 	}
 
-	w.dataMu.RLock()
-
-	if err := os.WriteFile(w.FilePath, newData, 0644); err != nil {
+	w.fileMu.RLock()
+	if err := os.WriteFile(w.FilePath, newData, 0755); err != nil {
 		err := fmt.Errorf("%w: %w", err, errFileFormat)
 		w.Log.Error(err, "failed to write file data")
 		span.SetStatus(codes.Error, err.Error())
 	}
+	w.fileMu.RUnlock()
 
 	w.dataMu.RUnlock()
 

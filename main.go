@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
@@ -12,12 +11,10 @@ import (
 	"os"
 	"os/signal"
 	"path"
-	"path/filepath"
-	"strings"
 	"syscall"
 
 	"github.com/appkins-org/go-redfish-uefi/api/redfish"
-	"github.com/appkins-org/go-redfish-uefi/internal/backend/persist"
+	"github.com/appkins-org/go-redfish-uefi/internal/backend/remote"
 	"github.com/appkins-org/go-redfish-uefi/internal/config"
 	itftp "github.com/appkins-org/go-redfish-uefi/internal/tftp"
 	"github.com/go-logr/logr"
@@ -41,7 +38,7 @@ func main() {
 		panic(err)
 	}
 
-	log := defaultLogger(cfg.LogLevel)
+	log := cfg.Log
 
 	backend, err := defaultBackend(context.Background(), log, cfg)
 	if err != nil {
@@ -54,11 +51,11 @@ func main() {
 
 	g, ctx := errgroup.WithContext(ctx)
 
-	server := redfish.NewRedfishServer(cfg, log, backend)
+	server := redfish.NewRedfishServer(cfg, backend)
 
 	handlers := map[string]func(http.ResponseWriter, *http.Request){}
 	handlers["/ipxe/"] = ihttp.Handler{
-		Log:   log.WithValues("service", "github.com/tinkerbell/smee").WithName("github.com/tinkerbell/ipxedust"),
+		Log:   log.WithValues("service", "github.com/appkins-org/go-redfish-uefi").WithName("github.com/appkins-org/go-redfish-uefi/api/ipxe"),
 		Patch: []byte(cfg.Tftp.IpxePatch),
 	}.Handle
 
@@ -67,7 +64,7 @@ func main() {
 	})
 
 	ts := &itftp.Server{
-		Logger:        log,
+		Logger:        log.WithName("tftp"),
 		RootDirectory: cfg.Tftp.RootDirectory,
 		Patch:         cfg.Tftp.IpxePatch,
 	}
@@ -118,7 +115,8 @@ func main() {
 }
 
 func defaultBackend(ctx context.Context, log logr.Logger, config *config.Config) (handler.BackendStore, error) {
-	f, err := persist.NewPersist(log, config)
+	f, err := remote.NewRemote(log, config)
+	// f, err := persist.NewPersist(log, config)
 	if err != nil {
 		return nil, err
 	}
@@ -208,42 +206,4 @@ func dhcpHandler(c *config.Config, ctx context.Context, log logr.Logger, backend
 		AutoProxyEnabled: true,
 	}
 	return dh, nil
-
-	return nil, errors.New("invalid dhcp mode")
-}
-
-// defaultLogger uses the slog logr implementation.
-func defaultLogger(level string) logr.Logger {
-	// source file and function can be long. This makes the logs less readable.
-	// truncate source file and function to last 3 parts for improved readability.
-	customAttr := func(_ []string, a slog.Attr) slog.Attr {
-		if a.Key == slog.SourceKey {
-			ss, ok := a.Value.Any().(*slog.Source)
-			if !ok || ss == nil {
-				return a
-			}
-			f := strings.Split(ss.Function, "/")
-			if len(f) > 3 {
-				ss.Function = filepath.Join(f[len(f)-3:]...)
-			}
-			p := strings.Split(ss.File, "/")
-			if len(p) > 3 {
-				ss.File = filepath.Join(p[len(p)-3:]...)
-			}
-
-			return a
-		}
-
-		return a
-	}
-	opts := &slog.HandlerOptions{AddSource: true, ReplaceAttr: customAttr}
-	switch level {
-	case "debug":
-		opts.Level = slog.LevelDebug
-	default:
-		opts.Level = slog.LevelInfo
-	}
-	log := slog.New(slog.NewJSONHandler(os.Stdout, opts))
-
-	return logr.FromSlogHandler(log.Handler())
 }

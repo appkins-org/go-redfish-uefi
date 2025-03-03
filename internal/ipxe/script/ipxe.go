@@ -61,7 +61,7 @@ func getByMac(ctx context.Context, mac net.HardwareAddr, br handler.BackendReade
 	if br == nil {
 		return data{}, errors.New("backend is nil")
 	}
-	d, n, err := br.GetByMac(ctx, mac)
+	d, n, _, err := br.GetByMac(ctx, mac)
 	if err != nil {
 		return data{}, err
 	}
@@ -84,7 +84,7 @@ func getByIP(ctx context.Context, ip net.IP, br handler.BackendReader) (data, er
 	if br == nil {
 		return data{}, errors.New("backend is nil")
 	}
-	d, n, err := br.GetByIP(ctx, ip)
+	d, n, _, err := br.GetByIP(ctx, ip)
 	if err != nil {
 		return data{}, err
 	}

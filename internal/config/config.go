@@ -2,10 +2,14 @@ package config
 
 import (
 	"log"
+	"log/slog"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/go-logr/logr"
 	"github.com/spf13/viper"
 )
 
@@ -53,12 +57,17 @@ type Config struct {
 	Dhcp            DhcpConfig  `yaml:"dhcp" mapstructure:"dhcp"`
 	LogLevel        string      `yaml:"log_level" mapstructure:"log_level"`
 	BackendFilePath string      `yaml:"backend_file_path" mapstructure:"backend_file_path"`
+	Log             logr.Logger `yaml:"-" mapstructure:"-"`
 }
 
 func NewConfig() (conf *Config, err error) {
 	conf = &Config{}
 
-	defaultIp, defaultIface, _ := GetLocalIP()
+	defaultIp, defaultIface, err := GetLocalIP()
+	if err != nil {
+		defaultIp = "0.0.0.0"
+		defaultIface = "eth0"
+	}
 
 	viper.SetConfigName("redfish")
 
@@ -116,6 +125,8 @@ func NewConfig() (conf *Config, err error) {
 	if err != nil {
 		return
 	}
+
+	conf.Log = defaultLogger(conf.LogLevel)
 
 	// Tell viper to watch the config file.
 	viper.WatchConfig()
@@ -177,4 +188,40 @@ func GetLocalIP() (string, string, error) {
 	}
 
 	return "", "", nil
+}
+
+// defaultLogger uses the slog logr implementation.
+func defaultLogger(level string) logr.Logger {
+	// source file and function can be long. This makes the logs less readable.
+	// truncate source file and function to last 3 parts for improved readability.
+	customAttr := func(_ []string, a slog.Attr) slog.Attr {
+		if a.Key == slog.SourceKey {
+			ss, ok := a.Value.Any().(*slog.Source)
+			if !ok || ss == nil {
+				return a
+			}
+			f := strings.Split(ss.Function, "/")
+			if len(f) > 3 {
+				ss.Function = filepath.Join(f[len(f)-3:]...)
+			}
+			p := strings.Split(ss.File, "/")
+			if len(p) > 3 {
+				ss.File = filepath.Join(p[len(p)-3:]...)
+			}
+
+			return a
+		}
+
+		return a
+	}
+	opts := &slog.HandlerOptions{AddSource: true, ReplaceAttr: customAttr}
+	switch level {
+	case "debug":
+		opts.Level = slog.LevelDebug
+	default:
+		opts.Level = slog.LevelInfo
+	}
+	log := slog.New(slog.NewJSONHandler(os.Stdout, opts))
+
+	return logr.FromSlogHandler(log.Handler())
 }

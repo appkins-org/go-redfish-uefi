@@ -74,11 +74,11 @@ func (c *lazyClient) init(ctx context.Context) error {
 	return initErr
 }
 
-func (c *lazyClient) ListActiveClients(ctx context.Context, site string) ([]unifi.ActiveClient, error) {
+func (c *lazyClient) ListActiveClients(ctx context.Context, site string) ([]unifi.ClientInfo, error) {
 	if err := c.init(context.Background()); err != nil {
 		panic(fmt.Sprintf("client not initialized: %s", err))
 	}
-	return c.inner.ListActiveClients(ctx, site)
+	return c.inner.ListClientsActive(ctx, site)
 }
 
 func (c *lazyClient) Version() string {

@@ -39,7 +39,7 @@ func NewPersist(l logr.Logger, config *config.Config) (*Persist, error) {
 		return nil, err
 	}
 
-	remoteBackend, err := remote.NewRemote(l, config.Unifi)
+	remoteBackend, err := remote.NewRemote(l, config)
 	if err != nil {
 		return nil, err
 	}
