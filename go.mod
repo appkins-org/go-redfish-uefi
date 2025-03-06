@@ -16,7 +16,7 @@ require (
 	github.com/ubiquiti-community/go-unifi v1.33.7
 	go.opentelemetry.io/otel/trace v1.32.0
 	go.uber.org/multierr v1.11.0
-	golang.org/x/sys v0.29.0
+	golang.org/x/sys v0.31.0
 )
 
 require (
