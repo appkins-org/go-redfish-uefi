@@ -1,6 +1,6 @@
 module github.com/appkins-org/go-redfish-uefi
 
-go 1.23.5
+go 1.25.0
 
 require (
 	github.com/0x5a17ed/uefi v0.7.0
@@ -14,7 +14,7 @@ require (
 	github.com/spf13/viper v1.19.0
 	github.com/squarefactory/ipmitool v0.0.0-20230411131013-f36f270ea246
 	github.com/ubiquiti-community/go-unifi v1.33.7
-	go.opentelemetry.io/otel/trace v1.32.0
+	go.opentelemetry.io/otel/trace v1.46.0
 	go.uber.org/multierr v1.11.0
 	golang.org/x/sys v0.29.0
 )
@@ -23,6 +23,7 @@ require (
 	github.com/0x5a17ed/itkit v0.7.0 // indirect
 	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
 	github.com/bytedance/sonic v1.10.0-rc3 // indirect
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/chenzhuoyu/base64x v0.0.0-20230717121745-296ad89f973d // indirect
 	github.com/chenzhuoyu/iasm v0.9.0 // indirect
 	github.com/dprotaso/go-yit v0.0.0-20220510233725-9ba8df137936 // indirect
@@ -65,7 +66,7 @@ require (
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.2.11 // indirect
 	github.com/vmware-labs/yaml-jsonpath v0.3.2 // indirect
-	go.opentelemetry.io/otel v1.32.0 // indirect
+	go.opentelemetry.io/otel v1.46.0 // indirect
 	golang.org/x/arch v0.4.0 // indirect
 	golang.org/x/crypto v0.32.0 // indirect
 	golang.org/x/exp v0.0.0-20240909161429-701f63a606c0 // indirect
