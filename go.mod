@@ -4,7 +4,7 @@ go 1.23.5
 
 require (
 	github.com/0x5a17ed/uefi v0.7.0
-	github.com/fsnotify/fsnotify v1.7.0
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gin-gonic/gin v1.9.1
 	github.com/oapi-codegen/oapi-codegen/v2 v2.4.1
 	github.com/oapi-codegen/runtime v1.1.1
