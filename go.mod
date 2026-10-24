@@ -1,6 +1,6 @@
 module github.com/appkins-org/go-redfish-uefi
 
-go 1.23.5
+go 1.25
 
 require (
 	github.com/0x5a17ed/uefi v0.7.0
@@ -27,9 +27,9 @@ require (
 	github.com/chenzhuoyu/iasm v0.9.0 // indirect
 	github.com/dprotaso/go-yit v0.0.0-20220510233725-9ba8df137936 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.6 // indirect
-	github.com/getkin/kin-openapi v0.127.0 // indirect
+	github.com/getkin/kin-openapi v0.149.0 // indirect
 	github.com/gin-contrib/sse v0.1.0 // indirect
-	github.com/go-openapi/jsonpointer v0.21.0 // indirect
+	github.com/go-openapi/jsonpointer v0.22.5 // indirect
 	github.com/go-openapi/swag v0.23.0 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
